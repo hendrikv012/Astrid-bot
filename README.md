@@ -1,158 +1,71 @@
-<div align="center">
-    <p>
-        <a href="https://wwebjs.dev">
-            <img src="https://github.com/wwebjs/Assets/blob/main/Collection/GitHub/whatsapp-web.js.png?raw=true"
-                title="whatsapp-web.js" alt="WWebJS Website" />
-        </a>
-    </p>
-    <p>
-        <a href="https://www.npmjs.com/package/whatsapp-web.js"><img
-                src="https://img.shields.io/npm/v/whatsapp-web.js.svg" alt="npm" /></a>
-        <a href="https://www.npmjs.com/package/whatsapp-web.js"><img alt="NPM Downloads"
-                src="https://img.shields.io/npm/d18m/whatsapp-web.js" /></a>
-        <a href="https://github.com/wwebjs/whatsapp-web.js/graphs/contributors"><img alt="GitHub contributors"
-                src="https://img.shields.io/github/contributors-anon/wwebjs/whatsapp-web.js" /></a>
-        <a href="https://depfu.com/github/wwebjs/whatsapp-web.js?project_id=9765"><img
-                src="https://badges.depfu.com/badges/4a65a0de96ece65fdf39e294e0c8dcba/overview.svg" alt="Depfu" /></a>
-        <a href="https://discord.wwebjs.dev"><img
-                src="https://img.shields.io/discord/698610475432411196.svg?logo=discord" alt="Discord server" /></a>
-    </p>
-</div>
+# Astrid — WhatsApp bot
 
-## About
+A WhatsApp customer-service bot built on [Baileys](https://github.com/WhiskeySockets/Baileys) (no browser) and a local LLM via [Ollama](https://ollama.com).
 
-whatsapp‑web.js is a powerful [Node.js][nodejs] library that lets you interact with WhatsApp Web, making it easy to build a dynamic WhatsApp API with nearly all features of the web client. It uses [Puppeteer][puppeteer] to access WhatsApp Web’s internal functions and runs them in a managed browser instance to reduce the risk of being blocked.
+- **Strict SOP** — `config/astrid.sop.yaml` is validated at startup; rules, forbidden topics, escalation and message limits are enforced in code, not just in the prompt.
+- **Fixed personality** — `config/persona.md` plus few-shot examples, always at the top of the prompt, never summarized away.
+- **Preloaded images** — `config/images.yaml` + `assets/images/`; the model picks an image by id, never resends it too soon.
+- **Human-like pacing** — reads after a short delay, shows "typing…" for as long as a person would need, splits answers over bubbles.
+- **Per-chat SQLite memory** — every message, extracted facts and rolling summaries, isolated per chat so details never leak between customers.
+- **RAG** — markdown/text in `knowledge/` is chunked, embedded and searched with `sqlite-vec`.
+- **Escalation & human takeover** — the owner gets alerted; the bot goes quiet in that chat when a human replies from the phone.
 
-## Links
+## Requirements
 
-- [GitHub][gitHub]
-- [Guide][guide] ([source][guide-source])
-- [Documentation][documentation] ([source][documentation-source])
-- [Discord Server][discord]
-- [npm][npm]
-
-## Installation
-
-**Node.js `v18.0.0` or higher, is required.**
+- Node.js ≥ 22.12
+- [Ollama](https://ollama.com) running locally (or reachable via `OLLAMA_HOST`)
+- A WhatsApp account for the bot (a separate number is strongly recommended)
 
 ```sh
-npm install whatsapp-web.js
-yarn add whatsapp-web.js
-pnpm add whatsapp-web.js
+ollama pull qwen2.5:14b-instruct   # chat model (any instruct model with JSON output works)
+ollama pull nomic-embed-text       # embeddings
 ```
 
-Having trouble installing? Take a peak at the [Guide][guide] for more detailed instructions.
+## Setup
 
-## Example usage
-
-```js
-const { Client } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
-
-const client = new Client();
-
-client.on('qr', (qr) => {
-    qrcode.generate(qr, { small: true });
-});
-
-client.on('ready', () => {
-    console.log('Client is ready!');
-});
-
-client.on('message', (msg) => {
-    if (msg.body == '!ping') {
-        msg.reply('pong');
-    }
-});
-
-client.initialize();
+```sh
+npm install
+cp .env.example .env               # set OWNER_JID at least
+npm run dev                        # scan the QR code: WhatsApp → Linked devices
 ```
 
-Take a look at [example.js][examples] for additional examples and use cases.  
-For more details on saving and restoring sessions, check out the [Authentication Strategies][auth-strategies].
+On every start the bot validates the config, checks that the Ollama models exist, and syncs `knowledge/` into the database (only changed files are re-embedded). Run `npm run ingest` to sync the knowledge base without starting the bot.
 
-## Supported features
+Tip: while testing, set `ALLOWED_JIDS` to your own number so the bot answers nobody else.
 
-| Feature                                          | Status                                       |
-| ------------------------------------------------ | -------------------------------------------- |
-| Multi Device                                     | ✅                                           |
-| Send messages                                    | ✅                                           |
-| Receive messages                                 | ✅                                           |
-| Send media (images/audio/documents)              | ✅                                           |
-| Send media (video)                               | ✅ [(requires Google Chrome)][google-chrome] |
-| Send stickers                                    | ✅                                           |
-| Receive media (images/audio/video/documents)     | ✅                                           |
-| Send contact cards                               | ✅                                           |
-| Send location                                    | ✅                                           |
-| Send buttons                                     | ❌ [(DEPRECATED)][deprecated-video]          |
-| Send lists                                       | ❌ [(DEPRECATED)][deprecated-video]          |
-| Receive location                                 | ✅                                           |
-| Message replies                                  | ✅                                           |
-| Join groups by invite                            | ✅                                           |
-| Get invite for group                             | ✅                                           |
-| Modify group info (subject, description)         | ✅                                           |
-| Modify group settings (send messages, edit info) | ✅                                           |
-| Add group participants                           | ✅                                           |
-| Kick group participants                          | ✅                                           |
-| Promote/demote group participants                | ✅                                           |
-| Mention users                                    | ✅                                           |
-| Mention groups                                   | ✅                                           |
-| Mute/unmute chats                                | ✅                                           |
-| Block/unblock contacts                           | ✅                                           |
-| Get contact info                                 | ✅                                           |
-| Get profile pictures                             | ✅                                           |
-| Set user status message                          | ✅                                           |
-| React to messages                                | ✅                                           |
-| Create polls                                     | ✅                                           |
-| Channels                                         | ✅                                           |
-| Vote in polls                                    | ✅                                           |
-| Communities                                      | 🔜                                           |
+## Customizing
 
-Something missing? Make an issue and let us know!
+| What                                                                          | Where                                   |
+| ----------------------------------------------------------------------------- | --------------------------------------- |
+| Rules, forbidden topics, escalation keywords, procedures, fixed texts, limits | `config/astrid.sop.yaml`                |
+| Personality, writing style, example conversations                             | `config/persona.md`                     |
+| Images the bot may send                                                       | `config/images.yaml` + `assets/images/` |
+| Business facts (prices, hours, policies…)                                     | `knowledge/*.md`                        |
 
-## Supporting the project
+The shipped content describes an example hair salon. Replace it with your own business.
 
-You can support the maintainer of this project through the links below:
+## Owner commands
 
-- [Support via GitHub Sponsors][gitHub-sponsors]
-- [Support via PayPal][support-payPal]
+Send these from `OWNER_JID` to the bot's number:
 
-## Contributing
+- `!resume 31612345678` — let the bot answer that chat again after an escalation
+- `!pause 31612345678` — silence the bot in that chat
 
-Feel free to open pull requests; we welcome contributions! However, for significant changes, it's best to open an issue beforehand. Make sure to review our [contribution guidelines][contributing] before creating a pull request. Before creating your own issue or pull request, always check to see if one already exists!
+## Scripts
+
+```sh
+npm run dev         # run with reload (tsx)
+npm run build       # compile to dist/
+npm start           # run dist/
+npm run ingest      # sync knowledge/ into the DB
+npm test            # vitest
+npm run check       # typecheck + lint + format check
+```
 
 ## Disclaimer
 
-This project is not affiliated, associated, authorized, endorsed by, or in any way officially connected with WhatsApp or any of its subsidiaries or its affiliates. The official WhatsApp website can be found at [whatsapp.com][whatsapp]. "WhatsApp" as well as related names, marks, emblems and images are registered trademarks of their respective owners. Also it is not guaranteed you will not be blocked by using this method. WhatsApp does not allow bots or unofficial clients on their platform, so this shouldn't be considered totally safe.
+Baileys is an unofficial WhatsApp client. WhatsApp does not allow unofficial bots, and the account may be banned. Use a dedicated number. The bot is honest about being a digital assistant when someone sincerely asks.
 
 ## License
 
-Copyright 2019 Pedro S Lopez
-
-Licensed under the Apache License, Version 2.0 (the "License");  
-you may not use this project except in compliance with the License.  
-You may obtain a copy of the License at <https://www.apache.org/licenses/LICENSE-2.0>.
-
-Unless required by applicable law or agreed to in writing, software  
-distributed under the License is distributed on an "AS IS" BASIS,  
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  
-See the License for the specific language governing permissions and  
-limitations under the License.
-
-[guide]: https://guide.wwebjs.dev/guide
-[guide-source]: https://github.com/wwebjs/wwebjs.dev/tree/main
-[documentation]: https://docs.wwebjs.dev/
-[documentation-source]: https://github.com/wwebjs/whatsapp-web.js/tree/main/docs
-[discord]: https://discord.wwebjs.dev
-[gitHub]: https://github.com/wwebjs/whatsapp-web.js
-[npm]: https://npmjs.org/package/whatsapp-web.js
-[nodejs]: https://nodejs.org/en/download/
-[examples]: https://github.com/wwebjs/whatsapp-web.js/blob/main/example.js
-[auth-strategies]: https://wwebjs.dev/guide/creating-your-bot/authentication.html
-[google-chrome]: https://wwebjs.dev/guide/creating-your-bot/handling-attachments.html#caveat-for-sending-videos-and-gifs
-[deprecated-video]: https://www.youtube.com/watch?v=hv1R1rLeVVE
-[gitHub-sponsors]: https://github.com/sponsors/wwebjs
-[support-payPal]: https://www.paypal.me/psla/
-[contributing]: .github/CONTRIBUTING.md
-[whatsapp]: https://whatsapp.com
-[puppeteer]: https://pptr.dev/
+Apache-2.0

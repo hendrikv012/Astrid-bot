@@ -1,67 +1,31 @@
 import globals from 'globals';
 import pluginEslintJs from '@eslint/js';
-import pluginMocha from 'eslint-plugin-mocha';
+import tseslint from 'typescript-eslint';
 import configEslintConfigPrettier from 'eslint-plugin-prettier/recommended';
 
-export default [
+export default tseslint.config(
+    { ignores: ['dist/**', 'node_modules/**', 'data/**', 'coverage/**'] },
     pluginEslintJs.configs.recommended,
+    ...tseslint.configs.recommended,
     {
-        name: 'whatsapp-web.js/default/rules',
-        plugins: {
-            mocha: pluginMocha,
-        },
+        name: 'astrid-bot/default/rules',
         languageOptions: {
-            ecmaVersion: 2025,
-
-            globals: {
-                ...globals.browser,
-                ...globals.commonjs,
-                ...globals.es6,
-                ...globals.node,
-
-                Atomics: 'readonly',
-                SharedArrayBuffer: 'readonly',
-            },
+            ecmaVersion: 2023,
+            sourceType: 'module',
+            globals: { ...globals.node },
         },
         rules: {
-            'no-unused-vars': [
+            '@typescript-eslint/no-unused-vars': [
                 'error',
-                {
-                    // TODO: args can be uncommented, but there is code, that causes lint-errors
-                    // args: 'all',
-                    vars: 'all',
-                    caughtErrorsIgnorePattern: '^ignoredError',
-                },
+                { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
             ],
+            '@typescript-eslint/consistent-type-imports': 'error',
         },
     },
     {
-        // be careful, "recommended" settings object has 4 fields:
-        // - name (string)
-        // - plugins (object)
-        // - languageOptions (object)
-        // - rules (object)
-        //
-        // by simple "adding" any of mentioned fields to this object
-        // you REPLACE the "recommended" value.
-        // If you want to PATCH it - consider nested "..." spread operator
-        ...pluginMocha.configs.recommended,
-        name: 'whatsapp-web.js/default/mocha',
-
-        files: ['tests/**/*'],
-    },
-    {
-        name: 'whatsapp-web.js/default/ignores',
-        ignores: [
-            'node_modules',
-            'dist',
-            'coverage',
-            'docs',
-            '*.min.js',
-            '.wa-version',
-            '.wwebjs_auth',
-            '.wwebjs_cache',
-        ],
+        files: ['commitlint.config.cjs'],
+        languageOptions: { sourceType: 'commonjs' },
+        rules: { '@typescript-eslint/no-require-imports': 'off' },
     },
     configEslintConfigPrettier,
-];
+);

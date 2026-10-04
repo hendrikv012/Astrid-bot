@@ -1,0 +1,13 @@
+# Preloaded images the bot may send. Files live in assets/images/.
+# The LLM only sees `id` and `when_to_use`; it picks at most one image per reply.
+# Every file is loaded into memory at startup — a missing file stops the bot.
+#
+#   id:           lowercase letters, digits, underscore
+#   file:         path relative to assets/images/ (.jpg, .jpeg, .png, .webp)
+#   caption:      sent with the image (may be empty)
+#   when_to_use:  plain-language rule the model follows
+
+- id: price_list
+  file: price-list.png
+  caption: 'Hier is onze prijslijst 📋'
+  when_to_use: The customer asks about prices, rates or what services cost, and has not received the price list recently.

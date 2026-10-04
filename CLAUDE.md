@@ -4,52 +4,48 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A fork of [whatsapp-web.js](https://github.com/wwebjs/whatsapp-web.js): a CommonJS Node.js (>=18) library that drives WhatsApp Web in a Puppeteer-controlled browser and exposes it as an event-emitting `Client` API. There is no build step; `index.js` re-exports everything and `index.d.ts` holds the hand-maintained TypeScript typings.
+Astrid: a WhatsApp customer-service bot. TypeScript (ESM, NodeNext), Node ≥ 22.12, built on Baileys v7 (WebSocket WhatsApp client), Ollama (local LLM + embeddings), and SQLite via `better-sqlite3` + `sqlite-vec`. The repo used to be a whatsapp-web.js fork; none of that code remains.
 
 ## Commands
 
 ```sh
-npm install
-npm run lint            # eslint . (the only check CI runs)
-npm run lint:fix
-npm run format:check    # prettier; `npm run format` to write
-npm run check           # lint + format:check — run before committing
-npm test                # mocha tests --recursive --timeout 5000
-npx mocha tests/structures/message.js --timeout 5000   # single file (or `npm run test-single -- <file>`)
-npx mocha tests --recursive -g "pattern"               # single test by name
-npm run shell           # REPL with an initialized `client` (shell.js)
-npm run generate-docs   # jsdoc -> docs/ (generated HTML, committed)
+npm run dev                        # tsx watch src/index.ts (needs Ollama running)
+npm run build                      # tsc -p tsconfig.build.json → dist/
+npm run typecheck                  # tsc --noEmit (includes tests/)
+npm run lint                       # eslint (typescript-eslint + prettier)
+npm run check                      # typecheck + lint + format:check
+npm test                           # vitest run
+npx vitest run tests/bot.test.ts   # one file
+npx vitest run -t "isolation"      # tests matching a name
+npm run ingest                     # sync knowledge/ into the DB (needs Ollama)
 ```
 
-Tests are integration tests against a real WhatsApp account: they need a `.env` (see `.env.example`) with `WWEBJS_TEST_CLIENT_ID` (a `LocalAuth` clientId with a saved, authenticated session) and `WWEBJS_TEST_REMOTE_ID` (another WhatsApp ID to message). `tests/helper.js` throws at load time if `WWEBJS_TEST_REMOTE_ID` is unset, so tests cannot run in a fresh environment — rely on lint/format for verification there.
-
-Formatting: Prettier with 4-space indent, single quotes, trailing commas, 80-col width. Husky runs lint-staged on pre-commit and commitlint on commit-msg.
-
-## Commit / PR conventions
-
-Conventional commits, header ≤72 chars, enforced by commitlint (`commitlint.config.js`). Allowed types: `feat fix docs style refactor perf test build ci chore types revert infra`. Use a scope matching the area, e.g. `fix(client): ...`, `feat(message): ...`. PR titles follow the same format; PRs fill in `.github/pull_request_template.md`.
+Tests need neither WhatsApp nor Ollama: they use an in-memory SQLite DB and fake `LlmClient` / `Sender` implementations (see `tests/bot.test.ts`). Relative imports must use the `.js` extension (NodeNext). Conventional commits (header ≤ 72 chars) are enforced by commitlint; husky runs lint-staged on commit.
 
 ## Architecture
 
-**Two execution contexts.** Most logic runs in two places, and keeping them straight is the main thing to understand:
+**Turn pipeline** (`src/pipeline/bot.ts`, class `Bot`): `receive()` stores every inbound message immediately, then pushes it onto a per-chat `ChatQueue`, which debounces bursts and serializes turns per chat. `handleTurn()` does: pause check → `sender.markRead` → `checkInbound` (SOP escalation/forbidden keywords, **in code, before the LLM**) → `resolveFlow` → `generate` (embed query → RAG + per-chat recall → `buildPrompt` → `llm.chatJson` with the reply schema → `checkReply`; one retry with feedback if blocked, else the SOP `unknown` template) → `sender.think/send` → store outbound with the SOP hash → `scheduleExtraction` (background, chained per chat).
 
-- **Node side** — `src/Client.js` (the `Client` EventEmitter, by far the largest file), `src/structures/*`, auth strategies, web cache.
-- **Browser side** — code passed to `page.evaluate(...)`. It runs inside WhatsApp Web, cannot reference Node variables or closures (pass everything as serializable arguments), and returns only serializable data.
+**Chat isolation is enforced by API shape, not by prompt.** This is the core invariant:
 
-**Injection flow (`Client.initialize` → `Client.inject`).** Puppeteer launches, navigates to WhatsApp Web, waits for `window.Debug.VERSION`, then checks `WAWebSocketModel` socket state to decide whether authentication (QR or pairing code) is needed. Once logged in, `LoadUtils` from `src/util/Injected/Utils.js` is evaluated in the page, installing `window.WWebJS` — a library of helpers built on WhatsApp's internal modules accessed via `window.require('WAWeb...')` (e.g. `WAWebCollections`). Node code calls into the page as `this.client.pupPage.evaluate(() => window.WWebJS.someHelper(...))`. Re-injection can happen on SPA navigation (`framenavigated`), so inject is abortable and guards against duplicate listeners/`ready` events.
+- All per-chat reads/writes go through `ChatMemory` (`src/memory/ChatMemory.ts`), constructed with one `chatJid`. Every query is bound to it, and foreign message ids are rejected.
+- `vec_messages` uses `chat_jid` as a sqlite-vec **partition key**, so recall can't even see other chats' vectors.
+- `kb_*` tables hold only ingested documents; chat content must never be written there.
+- `src/memory/leakIndex.ts` is the only cross-chat read. It returns other chats' identifying fact values solely so `checkReply` can block a reply that mentions them. Never feed its output into a prompt or a retry message.
+- Do not add a query over `messages`/`facts`/`summaries` that isn't scoped to one chat.
 
-**Events flow back** via `exposeFunctionIfAbsent` (`src/util/Puppeteer.js`), which registers Node callbacks on `window` (e.g. `onAddMessageEvent`); the page wires WhatsApp model listeners to those callbacks, and `Client` converts the payloads to structures and emits events named in `Events` (`src/util/Constants.js`).
+**Chat identity**: Baileys v7 can address a person by phone-number JID or by LID. `preferPn` in `src/whatsapp/inbound.ts` picks the PN when known so one person maps to one memory. `chatJid` is the memory key; `replyJid` is what WhatsApp gave us and is what we send to.
 
-**WhatsApp internals change without notice.** Most bug fixes here are adapting to renamed modules/fields in WhatsApp Web (see git log). Patterns to follow:
+**Prompt order is fixed** (`src/brain/prompt.ts`): persona + SOP + output contract → persona few-shot examples (assistant turns rendered as reply JSON) → memory/knowledge system message → history. When trimming for `LLM_NUM_CTX`, history is dropped first, then recalled messages, then KB chunks. Persona and SOP are never trimmed. That is what keeps the personality stable. User text is wrapped in `<user_message>` tags.
 
-- Prefer feature-detecting fallbacks over replacing the old path outright.
-- WhatsApp IDs: `_serialized` was renamed to `$1`; use `Base._normalizeId` so downstream code can keep using `_serialized`.
-- The supported WhatsApp Web version is tracked in `tools/version-checker/.version`; `webVersionCache` (`src/webCache/`: local/remote/none) controls which WA Web build is loaded.
+**Model output contract** (`src/brain/reply.ts`): `{messages[], image_id, escalate, escalate_reason, flow_done}`, passed to Ollama as a JSON-schema `format` (via `z.toJSONSchema`) and validated with zod. The schema allows `max_messages_per_reply + 2` bubbles so the guard trims instead of the call failing.
 
-**Structures (`src/structures/`).** All extend `Base`: constructed with `(client, data)`, populated through `_patch(data)` from the serialized model returned by `window.WWebJS.get*Model`, and methods call back into the page via `this.client.pupPage.evaluate`. `ChatFactory`/`ContactFactory` (`src/factories/`) pick the subclass (`PrivateChat`/`GroupChat`/`Channel`, `PrivateContact`/`BusinessContact`). New public structures must be exported from both `src/structures/index.js` and `index.js`, and typed in `index.d.ts`.
+**Config is validated at startup and a failure stops the bot**: `config/astrid.sop.yaml` (zod schema in `src/config/sop.ts`, `.strict()` so unknown keys fail; ids must be unique across sections), `config/persona.md` (parsed by `src/config/persona.ts`: text before `## Examples`, then `User:` / `<BotName>:` lines), and `config/images.yaml` (every file loaded into memory). Env vars are validated in `src/config/env.ts`; empty values count as unset.
 
-**Auth strategies (`src/authStrategies/`).** `BaseAuthStrategy` defines lifecycle hooks (`beforeBrowserInitialized`, `onAuthenticationNeeded`, `afterAuthReady`, `logout`, …) the Client calls; `LocalAuth` persists the browser `userDataDir` on disk, `RemoteAuth` zips it to a user-supplied store (uses the optional deps `archiver`/`unzipper`/`fs-extra`), `NoAuth` persists nothing.
+**Humanizing**: delay math is pure in `src/humanize/typing.ts`; `src/whatsapp/sender.ts` applies it (composing presence refreshed every 8 s). `HUMANIZE=false` disables all waits.
 
-**`InterfaceController`** (`src/util/InterfaceController.js`, exposed as `client.interface`) manipulates the WhatsApp Web UI itself (open chat drawers, etc.) rather than data.
+**Escalation / takeover**: an escalation records a row, notifies `OWNER_JID`, and sets `chats.paused_until` (`pause_bot_minutes`). A `fromMe` message not sent by the bot (tracked in `botSentIds` in `src/index.ts`) counts as a human takeover and pauses the bot too. The owner can send `!resume <number>` / `!pause <number>`.
 
-When adding or changing a public method/option/event, update its JSDoc (docs are generated from it) and `index.d.ts`.
+**DB schema** lives in `src/memory/migrations.ts` (append-only list, tracked by `PRAGMA user_version`). Vector tables are created in `src/memory/db.ts` with the dimension from `EMBED_DIM`, stored in `meta`. A mismatch refuses to open. Pass vec0 rowids as `BigInt` (`vecRowId`).
+
+**Honesty rule**: SOP rule `R7_honesty` and the persona examples have Astrid admit to being a digital assistant when sincerely asked. The drift guard deliberately doesn't block that. Keep it that way when editing the persona or guard.
