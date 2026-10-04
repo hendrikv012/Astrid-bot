@@ -104,7 +104,14 @@ async function main(): Promise<void> {
 
     const rawSender = createSender(conn.getSock, {
         humanize: env.HUMANIZE,
-        typing: { cpsMin: env.TYPING_CPS_MIN, cpsMax: env.TYPING_CPS_MAX },
+        typing: {
+            cpsMin: env.TYPING_CPS_MIN,
+            cpsMax: env.TYPING_CPS_MAX,
+            firstReplyMinMs: env.FIRST_REPLY_MIN_MS,
+            firstReplyMaxMs: env.FIRST_REPLY_MAX_MS,
+            pauseChance: env.TYPING_PAUSE_CHANCE,
+            distractionChance: env.DISTRACTION_CHANCE,
+        },
     });
     // Remember ids of bot-sent messages so they aren't mistaken for a human takeover.
     const sender: typeof rawSender = {
@@ -137,6 +144,11 @@ async function main(): Promise<void> {
             debounceMs: env.DEBOUNCE_MS,
             debounceMaxMs: env.DEBOUNCE_MAX_MS,
             extractModel: env.EXTRACT_MODEL,
+            firstReply: {
+                minMs: env.FIRST_REPLY_MIN_MS,
+                maxMs: env.HUMANIZE ? env.FIRST_REPLY_MAX_MS : 0,
+                coldAfterMs: env.COLD_START_AFTER_MIN * 60_000,
+            },
         },
     });
 

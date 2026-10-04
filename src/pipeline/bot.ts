@@ -18,6 +18,7 @@ import { foreignIdentifiers } from '../memory/leakIndex.js';
 import { QUERY_PREFIX, searchKnowledge, type KbHit } from '../rag/retrieve.js';
 import type { InboundMessage } from '../whatsapp/inbound.js';
 import type { Sender } from '../whatsapp/sender.js';
+import { firstReplyDelayMs } from '../humanize/typing.js';
 import { ChatQueue } from './chatQueue.js';
 
 export interface BotSettings {
@@ -33,6 +34,8 @@ export interface BotSettings {
     debounceMs: number;
     debounceMaxMs: number;
     extractModel?: string;
+    /** Random first-reply delay for cold chats; maxMs 0 disables it. */
+    firstReply: { minMs: number; maxMs: number; coldAfterMs: number };
 }
 
 export interface BotDeps {
@@ -114,7 +117,7 @@ export class Bot {
 
         if (msg.isGroup && !(settings.replyInGroups && msg.addressedToBot))
             return;
-        this.queue.push(msg.chatJid, { msg, rowId });
+        this.queue.push(msg.chatJid, { msg, rowId }, this.coldStartHold(mem));
     }
 
     /** A human replied from the business phone: store it and let them take over. */
@@ -129,6 +132,29 @@ export class Bot {
                 'human took over; bot paused',
             );
         }
+    }
+
+    /**
+     * A new chat, or one where we haven't replied for a while, gets a random
+     * delay before the first answer (like noticing a notification later).
+     * Messages that arrive during the wait are answered together.
+     */
+    private coldStartHold(mem: ChatMemory): number {
+        const { firstReply } = this.d.settings;
+        if (firstReply.maxMs <= 0 || this.queue.isBusy(mem.chatJid)) return 0;
+        const last = mem.lastOutboundAt();
+        const cold =
+            last === null || Date.now() - last > firstReply.coldAfterMs;
+        if (!cold) return 0;
+        const delay = firstReplyDelayMs({
+            firstReplyMinMs: firstReply.minMs,
+            firstReplyMaxMs: firstReply.maxMs,
+        });
+        this.d.log.debug(
+            { chat: mem.chatJid, delay },
+            'cold chat: delaying first reply',
+        );
+        return Date.now() + delay;
     }
 
     idle(): Promise<void> {

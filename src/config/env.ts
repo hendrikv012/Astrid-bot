@@ -39,6 +39,11 @@ const EnvSchema = z.object({
     HUMANIZE: bool.default(true),
     TYPING_CPS_MIN: z.coerce.number().positive().default(5),
     TYPING_CPS_MAX: z.coerce.number().positive().default(7),
+    FIRST_REPLY_MIN_MS: z.coerce.number().int().nonnegative().default(20000),
+    FIRST_REPLY_MAX_MS: z.coerce.number().int().nonnegative().default(150000),
+    COLD_START_AFTER_MIN: z.coerce.number().nonnegative().default(60),
+    TYPING_PAUSE_CHANCE: z.coerce.number().min(0).max(1).default(0.25),
+    DISTRACTION_CHANCE: z.coerce.number().min(0).max(1).default(0.1),
     DEBOUNCE_MS: z.coerce.number().int().nonnegative().default(3000),
     DEBOUNCE_MAX_MS: z.coerce.number().int().nonnegative().default(10000),
 

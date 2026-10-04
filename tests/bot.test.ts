@@ -1,6 +1,6 @@
 import path from 'node:path';
 import pino from 'pino';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ChatMessage, LlmClient } from '../src/brain/llm.js';
 import type { BotReply } from '../src/brain/reply.js';
 import { loadImages } from '../src/config/images.js';
@@ -132,6 +132,7 @@ function inbound(
 }
 
 let db: DB;
+let settingsOverride: Record<string, unknown> = {};
 let llm: FakeLlm;
 let sender: FakeSender;
 let bot: Bot;
@@ -144,11 +145,8 @@ async function say(chat: string, text: string, pushName?: string) {
 
 const allText = (msgs: ChatMessage[]) => msgs.map((m) => m.content).join('\n');
 
-beforeEach(() => {
-    db = openDb({ path: ':memory:', embedDim: DIM });
-    llm = new FakeLlm();
-    sender = new FakeSender();
-    bot = new Bot({
+function makeBot(): Bot {
+    return new Bot({
         db,
         llm,
         sender,
@@ -168,7 +166,53 @@ beforeEach(() => {
             numCtx: 8192,
             debounceMs: 0,
             debounceMaxMs: 0,
+            firstReply: { minMs: 0, maxMs: 0, coldAfterMs: 0 },
+            ...settingsOverride,
         },
+    });
+}
+
+beforeEach(() => {
+    db = openDb({ path: ':memory:', embedDim: DIM });
+    llm = new FakeLlm();
+    sender = new FakeSender();
+    bot = makeBot();
+});
+
+describe('cold-start delay', () => {
+    beforeEach(() => {
+        settingsOverride = {
+            firstReply: { minMs: 150, maxMs: 200, coldAfterMs: 60_000 },
+        };
+    });
+    afterEach(() => {
+        settingsOverride = {};
+    });
+
+    it('waits before the first reply and answers a burst as one turn', async () => {
+        // Re-create the bot with the override (beforeEach order: outer first).
+        bot = makeBot();
+        currentChat = A;
+        const t0 = Date.now();
+        bot.receive(inbound(A, 'hoi'));
+        await new Promise((r) => setTimeout(r, 50));
+        bot.receive(inbound(A, 'wat kost knippen?'));
+        await bot.idle();
+
+        expect(Date.now() - t0).toBeGreaterThanOrEqual(150);
+        expect(llm.prompts).toHaveLength(1);
+        expect(allText(llm.prompts[0]!.messages)).toContain(
+            'wat kost knippen?',
+        );
+        expect(sender.sent).toHaveLength(1);
+    });
+
+    it('answers without the extra delay once the chat is warm', async () => {
+        bot = makeBot();
+        await say(A, 'hoi');
+        const t0 = Date.now();
+        await say(A, 'nog een vraag');
+        expect(Date.now() - t0).toBeLessThan(150);
     });
 });
 

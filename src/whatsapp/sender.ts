@@ -2,12 +2,15 @@ import type { WAMessageKey, WASocket } from 'baileys';
 import type { PreloadedImage } from '../config/images.js';
 import {
     COMPOSING_REFRESH_MS,
+    distractionDelayMs,
     imagePickDelayMs,
     interBubbleGapMs,
+    pickTurnCps,
     readDelayMs,
     thinkDelayMs,
     typingDurationMs,
-    type TypingConfig,
+    typingSegments,
+    type HumanizeConfig,
 } from '../humanize/typing.js';
 
 export interface SendPlan {
@@ -37,7 +40,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function createSender(
     getSock: () => WASocket | null,
-    opts: { humanize: boolean; typing: TypingConfig },
+    opts: { humanize: boolean; typing: HumanizeConfig },
 ): Sender {
     const sock = () => {
         const s = getSock();
@@ -47,13 +50,24 @@ export function createSender(
     const wait = (ms: number) =>
         opts.humanize ? sleep(ms) : Promise.resolve();
 
-    /** Shows "typing…" for `ms`, refreshing so WhatsApp doesn't drop it. */
-    async function typeFor(jid: string, ms: number): Promise<void> {
-        if (!opts.humanize) return;
+    /** Shows "typing…" in a WhatsApp-safe way: refreshed before it expires. */
+    async function compose(jid: string, ms: number): Promise<void> {
         const end = Date.now() + ms;
         while (Date.now() < end) {
             await sock().sendPresenceUpdate('composing', jid);
             await sleep(Math.min(COMPOSING_REFRESH_MS, end - Date.now()));
+        }
+    }
+
+    /** Types for `ms` total, with occasional stops mid-message. */
+    async function typeFor(jid: string, ms: number): Promise<void> {
+        if (!opts.humanize) return;
+        for (const seg of typingSegments(ms, opts.typing)) {
+            await compose(jid, seg.composeMs);
+            if (seg.pauseMs) {
+                await sock().sendPresenceUpdate('paused', jid);
+                await sleep(seg.pauseMs);
+            }
         }
         await sock().sendPresenceUpdate('paused', jid);
     }
@@ -75,12 +89,13 @@ export function createSender(
                     .presenceSubscribe(replyJid)
                     .catch(() => {});
 
+            // Sometimes the person gets distracted before starting to type.
+            await wait(distractionDelayMs(opts.typing));
+            const cps = pickTurnCps(opts.typing);
+
             for (let i = 0; i < messages.length; i++) {
                 const text = messages[i]!;
-                await typeFor(
-                    replyJid,
-                    typingDurationMs(text.length, opts.typing),
-                );
+                await typeFor(replyJid, typingDurationMs(text.length, cps));
                 const res = await sock().sendMessage(replyJid, { text });
                 sent.push({
                     waMsgId: res?.key.id ?? null,

@@ -5,7 +5,7 @@ A WhatsApp customer-service bot built on [Baileys](https://github.com/WhiskeySoc
 - **Strict SOP** — `config/astrid.sop.yaml` is validated at startup; rules, forbidden topics, escalation and message limits are enforced in code, not just in the prompt.
 - **Fixed personality** — `config/persona.md` plus few-shot examples, always at the top of the prompt, never summarized away.
 - **Preloaded images** — `config/images.yaml` + `assets/images/`; the model picks an image by id, never resends it too soon.
-- **Human-like pacing** — reads after a short delay, shows "typing…" for as long as a person would need, splits answers over bubbles.
+- **Human-like pacing** — a random delay before the first reply in a new (or long-quiet) chat, read receipts after a short pause, "typing…" for as long as a person would need with random stops mid-message, a slightly different typing speed each reply, the occasional distraction, and answers split over bubbles.
 - **Per-chat SQLite memory** — every message, extracted facts and rolling summaries, isolated per chat so details never leak between customers.
 - **RAG** — markdown/text in `knowledge/` is chunked, embedded and searched with `sqlite-vec`.
 - **Escalation & human takeover** — the owner gets alerted; the bot goes quiet in that chat when a human replies from the phone.

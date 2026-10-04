@@ -42,7 +42,7 @@ Tests need neither WhatsApp nor Ollama: they use an in-memory SQLite DB and fake
 
 **Config is validated at startup and a failure stops the bot**: `config/astrid.sop.yaml` (zod schema in `src/config/sop.ts`, `.strict()` so unknown keys fail; ids must be unique across sections), `config/persona.md` (parsed by `src/config/persona.ts`: text before `## Examples`, then `User:` / `<BotName>:` lines), and `config/images.yaml` (every file loaded into memory). Env vars are validated in `src/config/env.ts`; empty values count as unset.
 
-**Humanizing**: delay math is pure in `src/humanize/typing.ts`; `src/whatsapp/sender.ts` applies it (composing presence refreshed every 8 s). `HUMANIZE=false` disables all waits.
+**Humanizing**: delay math is pure in `src/humanize/typing.ts`; `src/whatsapp/sender.ts` applies it (one typing speed per reply, typing split into stretches with random mid-message pauses, occasional pre-typing distraction, composing presence refreshed every 8 s). A "cold" chat (no reply yet, or none for `COLD_START_AFTER_MIN`) gets a random log-uniform first-reply delay: `Bot.coldStartHold` passes a `holdUntil` to `ChatQueue.push`, so messages arriving during the wait join the same batch and the chat stays unread (no blue ticks) until then. `HUMANIZE=false` disables all waits.
 
 **Escalation / takeover**: an escalation records a row, notifies `OWNER_JID`, and sets `chats.paused_until` (`pause_bot_minutes`). A `fromMe` message not sent by the bot (tracked in `botSentIds` in `src/index.ts`) counts as a human takeover and pauses the bot too. The owner can send `!resume <number>` / `!pause <number>`.
 

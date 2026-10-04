@@ -143,6 +143,16 @@ export class ChatMemory {
         return rows.map(toMessage);
     }
 
+    /** Timestamp of the last message sent to this chat (bot or human), or null. */
+    lastOutboundAt(): number | null {
+        const row = this.db
+            .prepare(
+                `SELECT MAX(ts) AS ts FROM messages WHERE chat_jid = ? AND direction = 'out'`,
+            )
+            .get(this.chatJid) as { ts: number | null };
+        return row.ts;
+    }
+
     countInbound(): number {
         const row = this.db
             .prepare(
