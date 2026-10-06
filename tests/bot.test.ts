@@ -154,7 +154,7 @@ async function say(chat: string, text: string, pushName?: string) {
 
 const allText = (msgs: ChatMessage[]) => msgs.map((m) => m.content).join('\n');
 
-function makeBot(): Bot {
+function makeBot(log = pino({ level: 'silent' })): Bot {
     return new Bot({
         db,
         llm,
@@ -162,7 +162,7 @@ function makeBot(): Bot {
         sop,
         persona,
         images,
-        log: pino({ level: 'silent' }),
+        log,
         settings: {
             ownerJid: OWNER,
             allowedJids: [],
@@ -512,5 +512,44 @@ describe('Bot pipeline', () => {
         await bot.idle();
         expect(sender.sent).toHaveLength(0);
         expect(new ChatMemory(db, g).recentMessages(5)).toHaveLength(1); // still remembered
+    });
+});
+
+describe('inbound logging', () => {
+    function capture() {
+        const lines: { msg: string; [k: string]: unknown }[] = [];
+        const log = pino(
+            { level: 'info' },
+            { write: (l: string) => void lines.push(JSON.parse(l)) },
+        );
+        return { lines, log };
+    }
+    afterEach(() => {
+        settingsOverride = {};
+    });
+
+    it('says why a message from a number outside ALLOWED_JIDS is ignored', async () => {
+        settingsOverride = { allowedJids: [B] };
+        const { lines, log } = capture();
+        bot = makeBot(log);
+        await say(A, 'hoi');
+        expect(sender.sent).toHaveLength(0);
+        expect(lines.map((l) => l.msg)).toContain(
+            'message ignored: sender not in ALLOWED_JIDS',
+        );
+    });
+
+    it('logs receipt, reply and send for a normal message', async () => {
+        const { lines, log } = capture();
+        bot = makeBot(log);
+        await say(A, 'hoi');
+        const msgs = lines.map((l) => l.msg);
+        expect(msgs).toEqual(
+            expect.arrayContaining([
+                'message received',
+                'replying',
+                'reply sent',
+            ]),
+        );
     });
 });

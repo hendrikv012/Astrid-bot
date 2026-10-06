@@ -1,6 +1,6 @@
 import type { WASocket } from 'baileys';
 import { describe, expect, it } from 'vitest';
-import { loadEnv } from '../src/config/env.js';
+import { loadEnv, normalizeJid } from '../src/config/env.js';
 import {
     RuntimeSettingsSchema,
     settingsFromEnv,
@@ -105,5 +105,38 @@ describe('sender', () => {
         const { sock } = fakeSock();
         const sender = createSender(() => sock, { humanize: false, typing });
         expect(await sender.sendRaw('x@s.whatsapp.net', 'hoi')).toBe('ID1');
+    });
+});
+
+describe('WhatsApp numbers in .env', () => {
+    it('accepts a bare number, +number or JID and normalizes them', () => {
+        expect(normalizeJid('37255512345')).toBe('37255512345@s.whatsapp.net');
+        expect(normalizeJid('+372 5551 2345')).toBe(
+            '37255512345@s.whatsapp.net',
+        );
+        expect(normalizeJid('37255512345@s.whatsapp.net')).toBe(
+            '37255512345@s.whatsapp.net',
+        );
+        expect(normalizeJid('123456789012345@lid')).toBe('123456789012345@lid');
+        const env = loadEnv({
+            OWNER_JID: '+31612345678',
+            ALLOWED_JIDS: '31612345678, 37255512345@s.whatsapp.net',
+        });
+        expect(env.OWNER_JID).toBe('31612345678@s.whatsapp.net');
+        expect(env.ALLOWED_JIDS).toEqual([
+            '31612345678@s.whatsapp.net',
+            '37255512345@s.whatsapp.net',
+        ]);
+    });
+
+    it('rejects placeholders and local numbers with a clear error', () => {
+        expect(normalizeJid('CHANGE31612345678@s.whatsapp.net')).toBeNull();
+        expect(normalizeJid('0612345678')).toBeNull();
+        expect(() =>
+            loadEnv({ OWNER_JID: 'CHANGE31612345678@s.whatsapp.net' }),
+        ).toThrow(/not a WhatsApp number/);
+        expect(() => loadEnv({ ALLOWED_JIDS: '31612345678,me' })).toThrow(
+            /"me" is not a WhatsApp number/,
+        );
     });
 });

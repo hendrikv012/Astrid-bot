@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { WAMessageStubType } from 'baileys';
 import { OllamaLlm, sameModel } from './brain/llm.js';
 import { isBehind, ScheduledLlm } from './brain/scheduler.js';
 import { loadEnv } from './config/env.js';
@@ -109,6 +110,23 @@ async function main(): Promise<void> {
         onMessages: (messages) => {
             if (!bot) return;
             for (const m of messages) {
+                if (
+                    !m.key.fromMe &&
+                    m.messageStubType === WAMessageStubType.CIPHERTEXT
+                ) {
+                    // Common right after linking: WhatsApp resends it once keys are exchanged.
+                    logger.warn(
+                        {
+                            chat: preferPn(
+                                m.key.remoteJid ?? '',
+                                m.key.remoteJidAlt,
+                            ),
+                            reason: m.messageStubParameters?.[0],
+                        },
+                        'could not decrypt an incoming message yet; WhatsApp usually resends it within a minute',
+                    );
+                    continue;
+                }
                 const msg = normalizeInbound(m, conn.self());
                 if (msg) {
                     bot.receive(msg);
@@ -198,6 +216,20 @@ async function main(): Promise<void> {
             },
         },
     });
+
+    logger.info(
+        {
+            owner: env.OWNER_JID ?? 'not set (no purchase alerts)',
+            answers: env.ALLOWED_JIDS.length
+                ? env.ALLOWED_JIDS
+                : 'everyone who messages the bot',
+            firstReplySec: env.HUMANIZE
+                ? `${env.FIRST_REPLY_MIN_MS / 1000}-${env.FIRST_REPLY_MAX_MS / 1000}`
+                : 0,
+            humanize: env.HUMANIZE,
+        },
+        'bot ready',
+    );
 
     const liveBot = bot;
     runtime.attach((s) =>

@@ -127,11 +127,15 @@ export class Bot {
     /** Entry point for every normalized inbound message. */
     receive(msg: InboundMessage): void {
         const { settings, log } = this.d;
+        const from = { chat: msg.chatJid, name: msg.pushName };
         if (
             settings.allowedJids.length &&
             !settings.allowedJids.includes(msg.chatJid)
         ) {
-            log.debug({ chat: msg.chatJid }, 'ignored: not in ALLOWED_JIDS');
+            log.info(
+                { ...from, allowed: settings.allowedJids },
+                'message ignored: sender not in ALLOWED_JIDS',
+            );
             return;
         }
         if (
@@ -139,6 +143,7 @@ export class Bot {
             msg.chatJid === settings.ownerJid &&
             msg.text.startsWith('!')
         ) {
+            log.info(from, 'owner command received');
             void this.ownerCommand(msg.text).catch((err) =>
                 log.error({ err }, 'owner command failed'),
             );
@@ -164,9 +169,25 @@ export class Bot {
         });
         if (rowId === null) return; // duplicate delivery
 
-        if (msg.isGroup && !(settings.replyInGroups && msg.addressedToBot))
+        if (msg.isGroup && !(settings.replyInGroups && msg.addressedToBot)) {
+            log.info(from, 'group message stored; not replying in groups');
             return;
-        this.queue.push(msg.chatJid, { msg, rowId }, this.coldStartHold(mem));
+        }
+        const holdUntil = this.coldStartHold(mem);
+        log.info(
+            holdUntil
+                ? {
+                      ...from,
+                      firstReplyInSec: Math.round(
+                          (holdUntil - Date.now()) / 1000,
+                      ),
+                  }
+                : from,
+            holdUntil
+                ? 'message received; new chat, waiting before the first reply'
+                : 'message received',
+        );
+        this.queue.push(msg.chatJid, { msg, rowId }, holdUntil);
     }
 
     /** A human replied from the business phone: store it and let them take over. */
@@ -199,10 +220,6 @@ export class Bot {
             firstReplyMinMs: firstReply.minMs,
             firstReplyMaxMs: firstReply.maxMs,
         });
-        this.d.log.debug(
-            { chat: mem.chatJid, delay },
-            'cold chat: delaying first reply',
-        );
         return Date.now() + delay;
     }
 
@@ -238,6 +255,7 @@ export class Bot {
             return;
         }
 
+        log.info({ chat: chatJid, messages: batch.length }, 'replying');
         await sender.markRead(keys, combined.length);
 
         // 1. SOP checks in code, before the LLM.
@@ -601,6 +619,14 @@ export class Bot {
             });
             if (s.imageId) mem.recordImageSent(s.imageId);
         }
+        this.d.log.info(
+            {
+                chat: mem.chatJid,
+                sent: sent.length,
+                planned: plan.messages.length + (plan.image ? 1 : 0),
+            },
+            'reply sent',
+        );
     }
 
     private async ownerCommand(text: string): Promise<void> {

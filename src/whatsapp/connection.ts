@@ -9,6 +9,7 @@ import makeWASocket, {
     type WAMessage,
     type WASocket,
 } from 'baileys';
+import type { ILogger } from 'baileys/lib/Utils/logger.js';
 import qrcode from 'qrcode-terminal';
 import type { Logger } from '../logger.js';
 import type { SelfIds } from './inbound.js';
@@ -51,8 +52,9 @@ export async function startConnection(
     const { log } = opts;
     fs.mkdirSync(opts.authDir, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(opts.authDir);
-    const waLog = log.child({ module: 'baileys' });
-    waLog.level = log.level === 'trace' ? 'debug' : 'warn';
+    const baileysLog = log.child({ module: 'baileys' });
+    baileysLog.level = log.level === 'trace' ? 'debug' : 'warn';
+    const waLog = quietAppStateNoise(baileysLog);
 
     // Baileys needs recently sent messages to answer re-send (retry) requests.
     const sentCache = new Map<string, proto.IMessage>();
@@ -163,6 +165,11 @@ export async function startConnection(
             }
             // 'append' = history sync / offline backlog; only react to live messages.
             if (type === 'notify') opts.onMessages(messages);
+            else
+                log.debug(
+                    { type, count: messages.length },
+                    'skipped non-live messages',
+                );
         });
     };
 
@@ -179,5 +186,32 @@ export async function startConnection(
             stopped = true;
             sock?.end(undefined);
         },
+    };
+}
+
+/**
+ * Right after linking, WhatsApp's settings sync (archive, mute, labels) can't
+ * be decoded until the phone shares its keys. The bot doesn't use that sync,
+ * so those warnings are logged at debug. Messages are not affected.
+ */
+const APP_STATE_NOISE = /missing key|failed to find key|decode mutation/i;
+
+function quietAppStateNoise(l: ILogger): ILogger {
+    const noisy = (args: unknown[]) =>
+        args.some((a) => typeof a === 'string' && APP_STATE_NOISE.test(a));
+    type Args = [unknown, string?];
+    return {
+        get level() {
+            return l.level;
+        },
+        set level(v: string) {
+            l.level = v;
+        },
+        child: (obj) => quietAppStateNoise(l.child(obj)),
+        trace: (...a: Args) => l.trace(...a),
+        debug: (...a: Args) => l.debug(...a),
+        info: (...a: Args) => l.info(...a),
+        warn: (...a: Args) => (noisy(a) ? l.debug(...a) : l.warn(...a)),
+        error: (...a: Args) => (noisy(a) ? l.debug(...a) : l.error(...a)),
     };
 }

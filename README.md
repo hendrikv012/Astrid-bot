@@ -33,7 +33,14 @@ npm run dev                        # scan the QR code: WhatsApp → Linked devic
 
 On every start the bot validates the config, checks that the Ollama models exist, and syncs `knowledge/` into the database (only changed files are re-embedded). Run `npm run ingest` to sync the knowledge base without starting the bot.
 
-Tip: while testing, set `ALLOWED_JIDS` to your own number so the bot answers nobody else.
+Numbers in `.env` (`OWNER_JID`, `ALLOWED_JIDS`) are written with country code and no leading 0, e.g. `31612345678`; a full JID (`31612345678@s.whatsapp.net`) works too.
+
+Testing:
+
+- A new chat waits 20–150 s (random) before the first reply, like a person noticing a notification. Set `FIRST_REPLY_MIN_MS=0` and `FIRST_REPLY_MAX_MS=0` for instant replies while testing.
+- Every incoming message is logged (`message received`, `replying`, `reply sent`), or with the reason it was ignored.
+- Right after linking, Baileys may log `failed to decrypt` once per contact; WhatsApp resends those messages automatically.
+- Optional: set `ALLOWED_JIDS` to your own number so the bot answers nobody else.
 
 ## Customizing
 

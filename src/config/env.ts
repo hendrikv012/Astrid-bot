@@ -12,6 +12,49 @@ const csv = z.string().transform((v) =>
         .filter(Boolean),
 );
 
+/**
+ * Turns `37255512345`, `+372 555 12345` or a full JID into a WhatsApp JID.
+ * Returns null for anything else (e.g. a placeholder left in .env).
+ */
+export function normalizeJid(raw: string): string | null {
+    const v = raw.trim();
+    const lid = /^(\d{5,20})@lid$/.exec(v);
+    if (lid) return `${lid[1]}@lid`;
+    const pn = /^\+?([\d\s-]{6,25})(@s\.whatsapp\.net|@c\.us)?$/.exec(v);
+    if (!pn) return null;
+    const digits = pn[1]!.replace(/\D/g, '');
+    if (digits.length < 6 || digits.length > 15 || digits.startsWith('0'))
+        return null;
+    return `${digits}@s.whatsapp.net`;
+}
+
+const jidHelp =
+    'use the number with country code, e.g. 31612345678 (no leading 0) or 31612345678@s.whatsapp.net';
+
+const jid = z.string().transform((v, ctx) => {
+    const j = normalizeJid(v);
+    if (!j) {
+        ctx.addIssue({
+            code: 'custom',
+            message: `"${v}" is not a WhatsApp number: ${jidHelp}`,
+        });
+        return z.NEVER;
+    }
+    return j;
+});
+
+const jidList = csv.transform((list, ctx) =>
+    list.map((v) => {
+        const j = normalizeJid(v);
+        if (!j)
+            ctx.addIssue({
+                code: 'custom',
+                message: `"${v}" is not a WhatsApp number: ${jidHelp}`,
+            });
+        return j ?? '';
+    }),
+);
+
 const EnvSchema = z
     .object({
         LOG_LEVEL: z
@@ -41,9 +84,9 @@ const EnvSchema = z
         CONFIG_DIR: z.string().default('config'),
         KNOWLEDGE_DIR: z.string().default('knowledge'),
 
-        OWNER_JID: z.string().optional(),
+        OWNER_JID: jid.optional(),
         PAIRING_NUMBER: z.string().optional(),
-        ALLOWED_JIDS: csv.default([]),
+        ALLOWED_JIDS: jidList.default([]),
         REPLY_IN_GROUPS: bool.default(false),
 
         DASHBOARD_ENABLED: bool.default(true),
