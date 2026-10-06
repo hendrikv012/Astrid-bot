@@ -151,6 +151,21 @@ beforeEach(async () => {
             user: '31600000099@s.whatsapp.net',
         }),
         listChatModels: async () => ['qwen2.5:14b-instruct', 'llama3.1:8b'],
+        load: () => ({
+            scheduler: {
+                running: 2,
+                queuedReplies: 40,
+                queuedBackground: 10,
+                replyWaitAvgMs: 150_000,
+                replyWaitMaxMs: 200_000,
+            },
+            outbound: {
+                sentLastMinute: 100,
+                maxPerMinute: 120,
+                merging: true,
+                waiting: 3,
+            },
+        }),
         reingest: async () => {
             reingestCalls++;
             await new Promise((r) => setTimeout(r, 30));
@@ -268,6 +283,10 @@ describe('chats', () => {
         const status = await json(call('GET', '/api/status'));
         expect(status.connection.status).toBe('open');
         expect(status.stats).toBeUndefined();
+        expect(status.load).toMatchObject({
+            behind: true,
+            outbound: { merging: true },
+        });
         const { stats } = await json(call('GET', '/api/stats'));
         expect(stats.chats).toBe(2);
         expect(stats).toHaveProperty('agreedToday', 0);

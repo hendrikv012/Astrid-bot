@@ -24,7 +24,7 @@ import type { Logger } from '../logger.js';
 import { ChatMemory } from '../memory/ChatMemory.js';
 import type { DB } from '../memory/db.js';
 import { runExtraction } from '../memory/extractor.js';
-import { foreignIdentifiers } from '../memory/leakIndex.js';
+import { LeakIndex } from '../memory/leakIndex.js';
 import { QUERY_PREFIX, searchKnowledge, type KbHit } from '../rag/retrieve.js';
 import type { InboundMessage } from '../whatsapp/inbound.js';
 import type { Sender } from '../whatsapp/sender.js';
@@ -82,8 +82,11 @@ export class Bot {
     private readonly senderNames = new Map<string, Map<string, string>>();
     /** Per-chat promise chain so background extraction never runs twice at once for a chat. */
     private readonly extraction = new Map<string, Promise<void>>();
+    /** Other customers' identifiers for the privacy check (cached, never prompted). */
+    private readonly leakIndex: LeakIndex;
 
     constructor(private readonly d: BotDeps) {
+        this.leakIndex = new LeakIndex(d.db);
         this.queue = new ChatQueue<QueuedMessage>({
             debounceMs: d.settings.debounceMs,
             maxWaitMs: d.settings.debounceMaxMs,
@@ -223,6 +226,9 @@ export class Bot {
         const combined = batch.map((b) => b.msg.text).join('\n');
         const keys: WAMessageKey[] = batch.map((b) => b.msg.key);
         const notPaused = () => mem.getPausedUntil() <= Date.now();
+        // A brand-new customer (nothing ever sent to this chat) gets the welcome picture first.
+        const welcome =
+            mem.lastOutboundAt() === null ? this.welcomeImage() : null;
 
         if (!notPaused()) {
             log.info(
@@ -243,7 +249,8 @@ export class Bot {
             );
             await this.sendAndStore(mem, turn, last.replyJid, {
                 messages: [sop.templates.refusal],
-                image: null,
+                image: welcome,
+                imageFirst: !!welcome,
             });
             return;
         }
@@ -252,7 +259,7 @@ export class Bot {
         const started = Date.now();
         const activeFlow = this.resolveFlow(mem, turn, combined, batch.length);
         // An image the customer asked for by keyword is sent by code, not left to the model.
-        const requested = this.requestedImage(mem, combined);
+        const requested = welcome ?? this.requestedImage(mem, combined);
         const reply = await this.generate(
             mem,
             turn,
@@ -290,6 +297,7 @@ export class Bot {
         await this.sendAndStore(mem, turn, last.replyJid, {
             messages: reply.messages,
             image,
+            imageFirst: !!welcome,
         });
 
         if (reply.flow_done && activeFlow) mem.setFlowState(null);
@@ -434,7 +442,14 @@ export class Bot {
         );
         const guardCtx = {
             sop,
-            foreignIdentifiers: foreignIdentifiers(this.d.db, mem.chatJid),
+            foreignIdentifiers: this.leakIndex.forChat(
+                mem.chatJid,
+                // What the customer wrote themselves may be repeated back.
+                history
+                    .filter((m) => m.direction === 'in')
+                    .map((m) => m.text)
+                    .join('\n'),
+            ),
             allowedImageIds,
         };
 
@@ -507,6 +522,13 @@ export class Bot {
         return lastAt !== null && Date.now() - lastAt < hours * 3_600_000;
     }
 
+    /** The image marked first_contact in images.yaml, if any. */
+    private welcomeImage(): PreloadedImage | null {
+        for (const img of this.d.images.values())
+            if (img.firstContact) return img;
+        return null;
+    }
+
     /** First image whose request_keywords appear in the customer's messages. */
     private requestedImage(
         mem: ChatMemory,
@@ -558,12 +580,14 @@ export class Bot {
         plan: {
             messages: string[];
             image: ReturnType<ImageLibrary['get']> | null;
+            imageFirst?: boolean;
         },
     ): Promise<void> {
         const sent = await this.d.sender.send({
             replyJid,
             messages: plan.messages,
             image: plan.image ?? null,
+            imageFirst: plan.imageFirst,
             // Stop mid-reply if a human takes over or the chat is paused meanwhile.
             shouldContinue: () => mem.getPausedUntil() <= Date.now(),
         });
@@ -613,6 +637,8 @@ export class Bot {
                     this.senderNames.get(mem.chatJid),
                 ),
             )
+            // Protect freshly learned details from the next reply in other chats.
+            .then(() => this.leakIndex.noteFacts(mem.chatJid, mem.getFacts()))
             .catch((err) =>
                 log.warn({ err, chat: mem.chatJid }, 'extraction failed'),
             )

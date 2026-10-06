@@ -116,4 +116,31 @@ export const migrations: string[] = [
     CREATE INDEX idx_chats_last_seen ON chats(last_seen);
     CREATE INDEX idx_chats_paused ON chats(paused_until);
     `,
+    /* 4: daily counters for dashboard stats (no full-table counts at 10k+ chats) */ `
+    CREATE TABLE stats_daily (
+        day   TEXT NOT NULL,
+        kind  TEXT NOT NULL,
+        n     INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (day, kind)
+    ) WITHOUT ROWID;
+
+    INSERT INTO stats_daily (day, kind, n)
+        SELECT date(ts / 1000, 'unixepoch', 'localtime'), 'msg_' || direction, COUNT(*)
+        FROM messages GROUP BY 1, 2;
+    INSERT INTO stats_daily (day, kind, n)
+        SELECT date(created_at / 1000, 'unixepoch', 'localtime'), 'sale_' || stage, COUNT(*)
+        FROM sales_events GROUP BY 1, 2;
+
+    CREATE TRIGGER trg_stats_messages AFTER INSERT ON messages BEGIN
+        INSERT INTO stats_daily (day, kind, n)
+        VALUES (date(NEW.ts / 1000, 'unixepoch', 'localtime'), 'msg_' || NEW.direction, 1)
+        ON CONFLICT (day, kind) DO UPDATE SET n = n + 1;
+    END;
+
+    CREATE TRIGGER trg_stats_sales AFTER INSERT ON sales_events BEGIN
+        INSERT INTO stats_daily (day, kind, n)
+        VALUES (date(NEW.created_at / 1000, 'unixepoch', 'localtime'), 'sale_' || NEW.stage, 1)
+        ON CONFLICT (day, kind) DO UPDATE SET n = n + 1;
+    END;
+    `,
 ];

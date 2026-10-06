@@ -18,6 +18,7 @@ npm test                           # vitest run
 npx vitest run tests/bot.test.ts   # one file
 npx vitest run -t "isolation"      # tests matching a name
 npm run ingest                     # sync knowledge/ into the DB (needs Ollama)
+npm run loadtest -- --fake-llm     # throughput test through the real pipeline (or real Ollama without --fake-llm)
 npm run start:pm2                  # production: build + run as pm2 process "astrid" (ecosystem.config.cjs; pm2 installed globally)
 ```
 
@@ -30,7 +31,7 @@ Tests need neither WhatsApp nor Ollama: they use an in-memory SQLite DB and fake
 **Chat isolation is enforced by API shape, not by prompt.** This is the core invariant:
 
 - All per-chat reads/writes go through `ChatMemory` (`src/memory/ChatMemory.ts`), constructed with one `chatJid`. Every query is bound to it, and foreign message ids are rejected.
-- `vec_messages` uses `chat_jid` as a sqlite-vec **partition key**, so recall can't even see other chats' vectors.
+- `vec_chat_messages` uses `chat_jid` as a sqlite-vec **partition key** (with `chunk_size=8`, otherwise every chat reserves ~3 MB), so recall can't even see other chats' vectors.
 - `kb_*` tables hold only ingested documents; chat content must never be written there.
 - `src/memory/leakIndex.ts` is the only cross-chat read on the bot path (the dashboard's admin queries are the other exception; see below). It returns other chats' identifying fact values solely so `checkReply` can block a reply that mentions them. Never feed its output into a prompt or a retry message.
 - Do not add a query over `messages`/`facts`/`summaries` that isn't scoped to one chat.
@@ -48,6 +49,10 @@ Tests need neither WhatsApp nor Ollama: they use an in-memory SQLite DB and fake
 **Dashboard** (`src/dashboard/`, UI in `dashboard/index.html`, vanilla JS with no build step): a `node:http` server started from `src/index.ts`. It binds to `DASHBOARD_HOST` (default 127.0.0.1), requires a bearer token on every `/api/*` call (images also accept `?token=` because `<img>` can't send headers), and rejects foreign `Host` headers. Live changes: `PUT /api/sop` / `/api/persona` validate with the same parsers, write atomically, and call `Bot.updateSop/updatePersona`. `PUT /api/settings` validates `RuntimeSettingsSchema`; `RuntimeStore` (`src/config/runtime.ts`) then pushes it through `applyRuntimeSettings` into the live `OllamaLlm` options, sender opts object and `BotSettings`, and saves only the keys that differ from `.env` in `meta` (each saved key is re-validated on load; invalid ones are dropped with a warning). Env bounds in `src/config/env.ts` must match the runtime schema (`tests/runtime.test.ts`). Startup checks the chat model the bot will actually use (a saved dashboard choice wins over `CHAT_MODEL`), and a dashboard that can't start is logged, not fatal. `/api/status` is polled by every tab, so keep it free of DB scans; stats live in `/api/stats`. `src/dashboard/admin.ts` holds the only chat-listing queries; like `leakIndex.ts` they cross chats and must never feed a prompt. The UI renders all chat text via `textContent`, because customer messages are untrusted.
 
 **Owner alerts are purchase-only** (a product decision, keep it): `Bot.handlePurchaseSignal` combines the model's `purchase` stage with SOP `sales` keywords (`detectPurchaseKeywords`; "agreed" keywords only count after prior interest), records a `sales_events` row and sends `templates.owner_interested/owner_agreed` to `OWNER_JID`, at most once per stage per chat within `renotify_after_hours`. The bot keeps chatting after an alert. Complaints, refunds and "I want a human" are answered by the model (SOP rule R6, contact details from `knowledge/`) with no alert. Because nobody follows up otherwise, `checkReply` blocks "I'll check / get back to you" style promises (`FALSE_PROMISE_PATTERNS`).
+
+**Throughput**: every model call goes through `ScheduledLlm` (`src/brain/scheduler.ts`): `LLM_CONCURRENCY` slots, reply lane before background lane (`priority: 'background'` in the extractor and ingest), background aged in after `BACKGROUND_MAX_WAIT_SEC`; `isBehind` (avg reply wait > 2 min) drives the dashboard pill and a log warning. `OutboundLimiter` (`src/whatsapp/outboundLimiter.ts`) caps sends per rolling minute (`acquire()` waits, never drops) and makes `sender.send` merge bubbles above `OUTBOUND_MERGE_AT`. `LeakIndex` is cached (rebuilt ≤ 1/min, updated via `noteFacts` after extraction) and ignores lone first names and anything the customer wrote; dashboard stats read `stats_daily` (trigger-maintained). Pass the same `senderOpts` object to `createSender` that the dashboard mutates — never a copy.
+
+**Welcome picture**: the image with `first_contact: true` is attached (sent first, `imageFirst`) when `mem.lastOutboundAt() === null`, also on the forbidden-topic path.
 
 **Takeover**: a `fromMe` message not sent by the bot (ids from `send` and `sendRaw` are tracked in `botSentIds` in `src/index.ts`) or a dashboard reply (`Bot.operatorSend`, sent to `chats.reply_jid`) pauses the bot for `human_takeover.pause_bot_minutes`; `sendAndStore` passes `shouldContinue` so a reply already being typed stops too. The owner can send `!resume <number>` / `!pause <number>`.
 

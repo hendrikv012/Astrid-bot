@@ -26,6 +26,15 @@ const EnvSchema = z
         LLM_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.4),
         LLM_SEED: z.coerce.number().int().default(42),
         LLM_NUM_CTX: z.coerce.number().int().positive().default(8192),
+        // Model calls at the same time; set Ollama's OLLAMA_NUM_PARALLEL to the same value.
+        LLM_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(2),
+        // Background memory work waiting longer than this goes ahead of replies.
+        BACKGROUND_MAX_WAIT_SEC: z.coerce
+            .number()
+            .int()
+            .min(5)
+            .max(3600)
+            .default(120),
 
         DB_PATH: z.string().default('data/astrid.db'),
         AUTH_DIR: z.string().default('data/auth'),
@@ -41,6 +50,17 @@ const EnvSchema = z
         DASHBOARD_HOST: z.string().default('127.0.0.1'),
         DASHBOARD_PORT: z.coerce.number().int().min(0).max(65535).default(3210),
         DASHBOARD_TOKEN: z.string().min(16).optional(),
+
+        // Outgoing messages per minute for the whole number (lower = lower ban risk);
+        // replies wait when it's reached, never dropped.
+        OUTBOUND_MAX_PER_MIN: z.coerce
+            .number()
+            .int()
+            .min(1)
+            .max(1000)
+            .default(120),
+        // From this share of the cap, multi-bubble replies are merged into one message.
+        OUTBOUND_MERGE_AT: z.coerce.number().min(0).max(1).default(0.5),
 
         HUMANIZE: bool.default(true),
         // Bounds below match src/config/runtime.ts (dashboard settings).

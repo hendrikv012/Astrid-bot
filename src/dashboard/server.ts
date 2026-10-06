@@ -19,6 +19,8 @@ import type { DB } from '../memory/db.js';
 import type { IngestResult } from '../rag/ingest.js';
 import type { ConnectionState } from '../whatsapp/connection.js';
 import { getStats, listChats, listKnowledge } from './admin.js';
+import { isBehind, type SchedulerStats } from '../brain/scheduler.js';
+import type { OutboundStats } from '../whatsapp/outboundLimiter.js';
 
 export interface DashboardDeps {
     db: DB;
@@ -50,6 +52,11 @@ export interface DashboardDeps {
         readonly defaults: RuntimeSettings;
     };
     connection: () => ConnectionState;
+    /** Live load: model queue and outgoing send rate (in-memory, cheap). */
+    load?: () => {
+        scheduler: SchedulerStats;
+        outbound: OutboundStats;
+    };
     /** Installed Ollama models that can chat (embedding models excluded). */
     listChatModels: () => Promise<string[]>;
     reingest: () => Promise<IngestResult>;
@@ -194,6 +201,7 @@ function buildRoutes(d: DashboardDeps): Route[] {
     // Polled every few seconds by every tab, so it must stay cheap: no DB scans.
     on('GET', '/api/status', () => ({
         connection: d.connection(),
+        load: loadInfo(d),
         sopHash: d.bot.sop.hash,
         botName: d.bot.sop.sop.identity.name,
     }));
@@ -439,6 +447,11 @@ function buildRoutes(d: DashboardDeps): Route[] {
     });
 
     return routes;
+}
+
+function loadInfo(d: DashboardDeps) {
+    const l = d.load?.();
+    return l ? { ...l, behind: isBehind(l.scheduler) } : null;
 }
 
 function isBinary(r: unknown): r is { binary: Buffer; type: string } {

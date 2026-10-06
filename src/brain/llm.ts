@@ -6,15 +6,21 @@ export interface ChatMessage {
     content: string;
 }
 
+/** Customer replies go first; background work (memory upkeep, ingest) waits. */
+export type LlmPriority = 'reply' | 'background';
+
 export interface LlmClient {
     /** Calls the chat model constrained to `schema`; returns parsed + validated output. */
     chatJson<T>(
         messages: ChatMessage[],
         schema: z.ZodType<T>,
-        opts?: { model?: string },
+        opts?: { model?: string; priority?: LlmPriority },
     ): Promise<T>;
     /** Embeds each text; returns one vector per input. */
-    embed(texts: string[]): Promise<number[][]>;
+    embed(
+        texts: string[],
+        opts?: { priority?: LlmPriority },
+    ): Promise<number[][]>;
 }
 
 export class LlmOutputError extends Error {}

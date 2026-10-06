@@ -4,7 +4,7 @@ import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openDb, type DB } from '../src/memory/db.js';
 import { ChatMemory } from '../src/memory/ChatMemory.js';
-import { foreignIdentifiers } from '../src/memory/leakIndex.js';
+import { LeakIndex } from '../src/memory/leakIndex.js';
 
 const DIM = 4;
 const A = '111@s.whatsapp.net';
@@ -67,14 +67,35 @@ describe('ChatMemory isolation', () => {
     });
 });
 
-describe('foreignIdentifiers', () => {
-    it('lists other chats’ identifying values except shared ones', () => {
-        a.upsertFact({ key: 'name', value: 'Annelies' });
+describe('LeakIndex', () => {
+    it('lists other chats’ identifiers but never lone first names', () => {
+        a.upsertFact({ key: 'first_name', value: 'Annelies' });
+        a.upsertFact({ key: 'name', value: 'Annelies de Vries' });
         a.upsertFact({ key: 'phone', value: '+31612345678' });
         a.upsertFact({ key: 'favourite_colour', value: 'green' });
-        b.upsertFact({ key: 'name', value: 'annelies' });
+        expect(new LeakIndex(db).forChat(B).sort()).toEqual([
+            '+31612345678',
+            'annelies de vries',
+        ]);
+    });
 
-        expect(foreignIdentifiers(db, B)).toEqual(['+31612345678']);
+    it('skips values this chat shares or the customer wrote themselves', () => {
+        a.upsertFact({ key: 'name', value: 'Annelies de Vries' });
+        a.upsertFact({ key: 'email', value: 'annelies@example.com' });
+        b.upsertFact({ key: 'name', value: 'annelies de vries' });
+        expect(
+            new LeakIndex(db).forChat(B, 'mail naar ANNELIES@example.com'),
+        ).toEqual([]);
+    });
+
+    it('rebuilds only after the cache time', () => {
+        let now = 0;
+        const idx = new LeakIndex(db, 60_000, () => now);
+        expect(idx.forChat(B)).toEqual([]);
+        a.upsertFact({ key: 'phone', value: '+31612345678' });
+        expect(idx.forChat(B)).toEqual([]); // cached
+        now = 61_000;
+        expect(idx.forChat(B)).toEqual(['+31612345678']);
     });
 });
 

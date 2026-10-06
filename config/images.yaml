@@ -12,6 +12,8 @@
 #                 image is sent by code (the model can't forget or pick another)
 #   resend_after_hours: overrides IMAGE_RESEND_HOURS for this image; 0 = send
 #                 it every time it is asked for
+#   first_contact: true = sent first, before the text, in the very first reply to
+#                 every new customer (at most one image can have this)
 
 - id: price_list
   file: price-list.png
@@ -39,3 +41,12 @@
           pics,
       ]
   resend_after_hours: 0
+
+# Sent first (view once) to every new customer, before the first text reply.
+# REPLACE assets/images/welcome.png with your own picture.
+- id: welcome
+  file: welcome.png
+  caption: ''
+  when_to_use: Only sent automatically to new customers; never pick it yourself.
+  view_once: true
+  first_contact: true

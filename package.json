@@ -17,6 +17,7 @@
         "build": "tsc -p tsconfig.build.json",
         "typecheck": "tsc --noEmit",
         "ingest": "tsx src/rag/ingest.ts",
+        "loadtest": "tsx src/tools/loadtest.ts",
         "test": "vitest run",
         "test:watch": "vitest",
         "lint": "eslint .",

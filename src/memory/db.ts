@@ -55,15 +55,37 @@ function ensureVectorTables(db: DB, dim: number): void {
             embedding float[${dim}] distance_metric=cosine
         );
         -- chat_jid is a partition key: a query constrained to one chat never
-        -- even considers vectors from another chat.
-        CREATE VIRTUAL TABLE IF NOT EXISTS vec_messages USING vec0(
+        -- even considers vectors from another chat. Each partition reserves
+        -- chunk_size vectors up front, so the default (1024, ~3 MB per chat)
+        -- would make 10,000 chats take ~30 GB; 8 keeps it at a few KB.
+        CREATE VIRTUAL TABLE IF NOT EXISTS vec_chat_messages USING vec0(
             chat_jid TEXT PARTITION KEY,
-            embedding float[${dim}] distance_metric=cosine
+            embedding float[${dim}] distance_metric=cosine,
+            chunk_size=8
         );
     `);
+    migrateOldMessageVectors(db);
     db.prepare(
         `INSERT OR IGNORE INTO meta (key, value) VALUES ('embed_dim', ?)`,
     ).run(String(dim));
+}
+
+/** Moves vectors from the pre-chunk_size table (vec_messages) and drops it. */
+function migrateOldMessageVectors(db: DB): void {
+    const old = db
+        .prepare(
+            `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vec_messages'`,
+        )
+        .get();
+    if (!old) return;
+    db.transaction(() => {
+        db.exec(`
+            INSERT INTO vec_chat_messages (rowid, chat_jid, embedding)
+                SELECT rowid, chat_jid, embedding FROM vec_messages;
+            DROP TABLE vec_messages;
+        `);
+    })();
+    db.exec('VACUUM');
 }
 
 /** sqlite-vec requires integer rowids; better-sqlite3 binds JS numbers as REAL. */

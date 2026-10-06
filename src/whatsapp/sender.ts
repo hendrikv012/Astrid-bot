@@ -1,5 +1,6 @@
 import type { WAMessageKey, WASocket } from 'baileys';
 import type { PreloadedImage } from '../config/images.js';
+import type { OutboundLimiter } from './outboundLimiter.js';
 import {
     COMPOSING_REFRESH_MS,
     distractionDelayMs,
@@ -22,6 +23,8 @@ export interface SendPlan {
      * the reply, e.g. when a human took over the chat while the bot was typing.
      */
     shouldContinue?: () => boolean;
+    /** Send the image before the text (e.g. the welcome picture). */
+    imageFirst?: boolean;
 }
 
 export interface SentMessage {
@@ -37,7 +40,7 @@ export interface Sender {
     think(elapsedMs: number): Promise<void>;
     /** Send bubbles (and optional image) with typing indicators and pacing. */
     send(plan: SendPlan): Promise<SentMessage[]>;
-    /** Plain immediate send without humanizing (owner alerts, operator replies). Returns the message id. */
+    /** Immediate send, no humanizing and no waiting for the send cap (owner alerts, operator replies). Returns the message id. */
     sendRaw(jid: string, text: string): Promise<string | null>;
 }
 
@@ -45,8 +48,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function createSender(
     getSock: () => WASocket | null,
-    opts: { humanize: boolean; typing: HumanizeConfig },
+    opts: {
+        humanize: boolean;
+        typing: HumanizeConfig;
+        /** Caps outgoing messages per minute and signals when to merge bubbles. */
+        limiter?: OutboundLimiter;
+    },
 ): Sender {
+    const slot = () => opts.limiter?.acquire() ?? Promise.resolve();
     const sock = () => {
         const s = getSock();
         if (!s) throw new Error('WhatsApp socket not connected');
@@ -87,7 +96,7 @@ export function createSender(
             await wait(Math.max(0, thinkDelayMs() - elapsedMs));
         },
 
-        async send({ replyJid, messages, image, shouldContinue }) {
+        async send({ replyJid, messages, image, shouldContinue, imageFirst }) {
             const sent: SentMessage[] = [];
             const keepGoing = () => !shouldContinue || shouldContinue();
             const stop = async () => {
@@ -106,25 +115,18 @@ export function createSender(
             await wait(distractionDelayMs(opts.typing));
             const cps = pickTurnCps(opts.typing);
 
-            for (let i = 0; i < messages.length; i++) {
-                const text = messages[i]!;
-                if (!keepGoing()) return stop();
-                await typeFor(replyJid, typingDurationMs(text.length, cps));
-                if (!keepGoing()) return stop();
-                const res = await sock().sendMessage(replyJid, { text });
-                sent.push({
-                    waMsgId: res?.key.id ?? null,
-                    text,
-                    imageId: null,
-                });
-                if (i < messages.length - 1 || image)
-                    await wait(interBubbleGapMs());
-            }
+            // When the number is busy, one message instead of several saves sends.
+            const bubbles =
+                messages.length > 1 && opts.limiter?.shouldMerge()
+                    ? [messages.join('\n\n')]
+                    : messages;
 
-            if (image) {
-                if (!keepGoing()) return stop();
+            const sendImage = async (): Promise<boolean> => {
+                if (!image) return true;
+                if (!keepGoing()) return false;
                 await typeFor(replyJid, imagePickDelayMs());
-                if (!keepGoing()) return stop();
+                if (!keepGoing()) return false;
+                await slot();
                 const res = await sock().sendMessage(replyJid, {
                     image: image.data,
                     mimetype: image.mimetype,
@@ -136,12 +138,38 @@ export function createSender(
                     text: image.caption,
                     imageId: image.id,
                 });
+                return true;
+            };
+
+            if (image && imageFirst) {
+                if (!(await sendImage())) return stop();
+                if (bubbles.length) await wait(interBubbleGapMs());
             }
+
+            for (let i = 0; i < bubbles.length; i++) {
+                const text = bubbles[i]!;
+                if (!keepGoing()) return stop();
+                await typeFor(replyJid, typingDurationMs(text.length, cps));
+                if (!keepGoing()) return stop();
+                await slot();
+                const res = await sock().sendMessage(replyJid, { text });
+                sent.push({
+                    waMsgId: res?.key.id ?? null,
+                    text,
+                    imageId: null,
+                });
+                if (i < bubbles.length - 1 || (image && !imageFirst))
+                    await wait(interBubbleGapMs());
+            }
+
+            if (image && !imageFirst && !(await sendImage())) return stop();
 
             return sent;
         },
 
         async sendRaw(jid, text) {
+            // Owner alerts and human replies go out immediately but still count.
+            opts.limiter?.note();
             const res = await sock().sendMessage(jid, { text });
             return res?.key.id ?? null;
         },

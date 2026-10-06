@@ -9,6 +9,7 @@ A WhatsApp customer-service bot built on [Baileys](https://github.com/WhiskeySoc
 - **Human-like pacing** — a random delay before the first reply in a new (or long-quiet) chat, read receipts after a short pause, "typing…" for as long as a person would need with random stops mid-message, a slightly different typing speed each reply, the occasional distraction, and answers split over bubbles.
 - **Per-chat SQLite memory** — every message, extracted facts and rolling summaries, isolated per chat so details never leak between customers.
 - **RAG** — markdown/text in `knowledge/` is chunked, embedded and searched with `sqlite-vec`.
+- **Welcome picture** — every new customer first gets a view-once picture (`first_contact: true` in `config/images.yaml`; replace `assets/images/welcome.png`).
 - **Human takeover** — when you reply yourself (from the phone or the dashboard), the bot stops, even mid-reply, and stays quiet in that chat for `human_takeover.pause_bot_minutes` (default 60).
 
 ## Requirements
@@ -44,6 +45,20 @@ Tip: while testing, set `ALLOWED_JIDS` to your own number so the bot answers nob
 | Business facts (prices, hours, policies…)                                                   | `knowledge/*.md`                        |
 
 The shipped content describes an example hair salon. Replace it with your own business.
+
+## Handling high volume (100–200 messages/minute)
+
+- **Model queue** — all model calls share one queue (`LLM_CONCURRENCY` at a time; start Ollama with the same `OLLAMA_NUM_PARALLEL`). Customer replies always go first; memory updates (facts, summaries) wait, at most `BACKGROUND_MAX_WAIT_SEC`.
+- **Send cap** — at most `OUTBOUND_MAX_PER_MIN` messages leave the number per minute (lower = lower ban risk). Replies are delayed, never dropped, and when busy the bot merges its bubbles into one message. The cap must be higher than the number of customers you expect to answer per minute (the welcome picture counts as an extra send for new customers).
+- **Behind warning** — when replies wait more than 2 minutes for the model, the dashboard pill turns orange and the log warns. The Status tab shows the model queue, memory backlog and sends per minute.
+- **Load test** — measure your machine before going live:
+
+```sh
+npm run loadtest -- --rate 200 --chats 5000 --minutes 3          # real Ollama from .env
+npm run loadtest -- --fake-llm --fake-latency 3000 --rate 200    # without a model
+```
+
+It prints wait times per minute and a verdict ("keeps up" / "falls behind"). Nothing is sent to WhatsApp.
 
 ## Running in the background (pm2)
 

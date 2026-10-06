@@ -63,33 +63,26 @@ export interface Stats {
 }
 
 export function getStats(db: DB, now = Date.now()): Stats {
-    const dayStart = new Date(now);
-    dayStart.setHours(0, 0, 0, 0);
-    const since = dayStart.getTime();
     const one = (sql: string, ...args: unknown[]) =>
         (db.prepare(sql).get(...args) as { n: number }).n;
+    // Today's counts come from stats_daily (kept by triggers), not full scans.
+    const today = db
+        .prepare(
+            `SELECT kind, n FROM stats_daily
+             WHERE day = date(? / 1000, 'unixepoch', 'localtime')`,
+        )
+        .all(now) as { kind: string; n: number }[];
+    const count = (kind: string) => today.find((r) => r.kind === kind)?.n ?? 0;
     return {
         chats: one(`SELECT COUNT(*) AS n FROM chats`),
-        messagesToday: one(
-            `SELECT COUNT(*) AS n FROM messages WHERE direction = 'in' AND ts >= ?`,
-            since,
-        ),
-        repliesToday: one(
-            `SELECT COUNT(*) AS n FROM messages WHERE direction = 'out' AND ts >= ?`,
-            since,
-        ),
+        messagesToday: count('msg_in'),
+        repliesToday: count('msg_out'),
         pausedChats: one(
             `SELECT COUNT(*) AS n FROM chats WHERE paused_until > ?`,
             now,
         ),
-        interestedToday: one(
-            `SELECT COUNT(*) AS n FROM sales_events WHERE stage = 'interested' AND created_at >= ?`,
-            since,
-        ),
-        agreedToday: one(
-            `SELECT COUNT(*) AS n FROM sales_events WHERE stage = 'agreed' AND created_at >= ?`,
-            since,
-        ),
+        interestedToday: count('sale_interested'),
+        agreedToday: count('sale_agreed'),
         kbDocuments: one(`SELECT COUNT(*) AS n FROM kb_documents`),
         kbChunks: one(`SELECT COUNT(*) AS n FROM kb_chunks`),
     };

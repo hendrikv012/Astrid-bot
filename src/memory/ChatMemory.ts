@@ -357,11 +357,11 @@ export class ChatMemory {
         }
         this.db.transaction(() => {
             this.db
-                .prepare(`DELETE FROM vec_messages WHERE rowid = ?`)
+                .prepare(`DELETE FROM vec_chat_messages WHERE rowid = ?`)
                 .run(vecRowId(msgId));
             this.db
                 .prepare(
-                    `INSERT INTO vec_messages (rowid, chat_jid, embedding) VALUES (?, ?, ?)`,
+                    `INSERT INTO vec_chat_messages (rowid, chat_jid, embedding) VALUES (?, ?, ?)`,
                 )
                 .run(vecRowId(msgId), this.chatJid, toVec(embedding));
             this.db
@@ -378,7 +378,7 @@ export class ChatMemory {
     ): StoredMessage[] {
         const rows = this.db
             .prepare(
-                `SELECT rowid AS id FROM vec_messages
+                `SELECT rowid AS id FROM vec_chat_messages
                  WHERE embedding MATCH ? AND k = ? AND chat_jid = ?
                  ORDER BY distance`,
             )

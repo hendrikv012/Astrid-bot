@@ -21,6 +21,8 @@ const ImageEntry = z
         request_keywords: z.array(z.string().min(1)).default([]),
         /** Overrides IMAGE_RESEND_HOURS for this image (0 = send every time). */
         resend_after_hours: z.number().min(0).max(720).optional(),
+        /** Sent first, before the text, in the first reply to every new customer. */
+        first_contact: z.boolean().default(false),
     })
     .strict();
 
@@ -34,6 +36,8 @@ export interface PreloadedImage {
     requestKeywords: string[];
     /** null = use the global IMAGE_RESEND_HOURS setting. */
     resendAfterHours: number | null;
+    /** Sent first in the first reply to every new customer. */
+    firstContact: boolean;
     mimetype: string;
     data: Buffer;
 }
@@ -67,6 +71,13 @@ export function loadImages(
         );
     }
 
+    const welcome = parsed.data.filter((e) => e.first_contact);
+    if (welcome.length > 1) {
+        throw new Error(
+            `${manifestFile}: only one image can have first_contact: true (found ${welcome.map((e) => e.id).join(', ')})`,
+        );
+    }
+
     for (const entry of parsed.data) {
         if (lib.has(entry.id)) {
             throw new Error(
@@ -92,6 +103,7 @@ export function loadImages(
             viewOnce: entry.view_once,
             requestKeywords: entry.request_keywords,
             resendAfterHours: entry.resend_after_hours ?? null,
+            firstContact: entry.first_contact,
             mimetype,
             data: fs.readFileSync(file),
         });

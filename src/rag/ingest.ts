@@ -59,6 +59,7 @@ export async function ingestKnowledge(
                         (c) =>
                             `${DOCUMENT_PREFIX}${c.heading ? `${c.heading}\n` : ''}${c.text}`,
                     ),
+                    { priority: 'background' },
                 )),
             );
         }

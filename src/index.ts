@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { OllamaLlm, sameModel } from './brain/llm.js';
+import { isBehind, ScheduledLlm } from './brain/scheduler.js';
 import { loadEnv } from './config/env.js';
 import { loadImages } from './config/images.js';
 import { loadPersona } from './config/persona.js';
@@ -10,11 +11,13 @@ import { applyRuntimeSettings } from './dashboard/admin.js';
 import { startDashboard } from './dashboard/server.js';
 import type { DB } from './memory/db.js';
 import { logger } from './logger.js';
+import { BoundedSet } from './util/boundedSet.js';
 import { openDb } from './memory/db.js';
 import { Bot } from './pipeline/bot.js';
 import { ingestKnowledge } from './rag/ingest.js';
 import { startConnection } from './whatsapp/connection.js';
 import { normalizeInbound, preferPn } from './whatsapp/inbound.js';
+import { OutboundLimiter } from './whatsapp/outboundLimiter.js';
 import { createSender } from './whatsapp/sender.js';
 
 async function main(): Promise<void> {
@@ -89,8 +92,15 @@ async function main(): Promise<void> {
         'knowledge base synced',
     );
 
+    // One queue for all model calls: customer replies before background work.
+    const scheduledLlm = new ScheduledLlm(llm, {
+        concurrency: env.LLM_CONCURRENCY,
+        backgroundMaxWaitMs: env.BACKGROUND_MAX_WAIT_SEC * 1000,
+    });
+
     let bot: Bot | null = null;
-    const botSentIds = new Set<string>();
+    // Only recent ids matter (echoes arrive within seconds); keep memory flat.
+    const botSentIds = new BoundedSet<string>(5000);
 
     const conn = await startConnection({
         authDir: env.AUTH_DIR,
@@ -127,7 +137,12 @@ async function main(): Promise<void> {
         },
     });
 
+    const outbound = new OutboundLimiter({
+        maxPerMinute: env.OUTBOUND_MAX_PER_MIN,
+        mergeAt: env.OUTBOUND_MERGE_AT,
+    });
     const senderOpts = {
+        limiter: outbound,
         humanize: env.HUMANIZE,
         typing: {
             cpsMin: env.TYPING_CPS_MIN,
@@ -138,6 +153,7 @@ async function main(): Promise<void> {
             distractionChance: env.DISTRACTION_CHANCE,
         },
     };
+    // Same object the dashboard mutates (applyRuntimeSettings), so no copies.
     const rawSender = createSender(conn.getSock, senderOpts);
     // Remember ids of bot-sent messages so they aren't mistaken for a human takeover.
     const sender: typeof rawSender = {
@@ -156,7 +172,7 @@ async function main(): Promise<void> {
 
     bot = new Bot({
         db,
-        llm,
+        llm: scheduledLlm,
         sender,
         sop,
         persona,
@@ -193,7 +209,7 @@ async function main(): Promise<void> {
     );
 
     const knowledgeSync = () =>
-        ingestKnowledge(db, llm, env.KNOWLEDGE_DIR, (m) =>
+        ingestKnowledge(db, scheduledLlm, env.KNOWLEDGE_DIR, (m) =>
             logger.info(`knowledge: ${m}`),
         );
 
@@ -217,6 +233,10 @@ async function main(): Promise<void> {
                 images,
                 runtime,
                 connection: conn.state,
+                load: () => ({
+                    scheduler: scheduledLlm.stats(),
+                    outbound: outbound.stats(),
+                }),
                 listChatModels: () => llm.listChatModels(),
                 reingest: knowledgeSync,
             });
@@ -240,6 +260,19 @@ async function main(): Promise<void> {
             );
         }
     }
+
+    // Warn in the log (at most once a minute) when replies fall behind.
+    let lastBehindWarn = 0;
+    setInterval(() => {
+        const s = scheduledLlm.stats();
+        if (isBehind(s) && Date.now() - lastBehindWarn > 60_000) {
+            lastBehindWarn = Date.now();
+            logger.warn(
+                { ...s, outbound: outbound.stats() },
+                `Behind: replies wait ~${Math.round(s.replyWaitAvgMs / 1000)}s for the model. Consider a smaller CHAT_MODEL, EXTRACT_MODEL, more OLLAMA_NUM_PARALLEL/LLM_CONCURRENCY or another GPU.`,
+            );
+        }
+    }, 30_000).unref();
 
     const shutdown = async (signal: string) => {
         dashboard?.close();

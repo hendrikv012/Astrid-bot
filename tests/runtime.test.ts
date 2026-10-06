@@ -93,6 +93,7 @@ describe('sender', () => {
                 viewOnce: true,
                 requestKeywords: [],
                 resendAfterHours: 0,
+                firstContact: false,
                 mimetype: 'image/png',
                 data: Buffer.from([1]),
             },

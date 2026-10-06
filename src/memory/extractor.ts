@@ -50,6 +50,7 @@ async function embedPending(
     if (!pending.length) return;
     const vectors = await llm.embed(
         pending.map((m) => `search_document: ${m.text}`),
+        { priority: 'background' },
     );
     pending.forEach((m, i) => mem.storeMessageEmbedding(m.id, vectors[i]!));
 }
@@ -106,7 +107,10 @@ async function extractFacts(
     ];
 
     try {
-        const out = await llm.chatJson(messages, FactsOutput, { model });
+        const out = await llm.chatJson(messages, FactsOutput, {
+            model,
+            priority: 'background',
+        });
         const lastInbound = newInbound.at(-1)!.id;
         for (const f of out.facts) {
             const subject = isGroup ? labelToJid.get(f.subject) : 'chat';
@@ -159,7 +163,10 @@ async function maybeSummarize(
         },
     ];
     try {
-        const out = await llm.chatJson(messages, SummaryOutput, { model });
+        const out = await llm.chatJson(messages, SummaryOutput, {
+            model,
+            priority: 'background',
+        });
         mem.setSummary(out.summary, toFold.at(-1)!.id);
     } catch (err) {
         log.warn({ err, chat: mem.chatJid }, 'summary update failed');

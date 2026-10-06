@@ -144,7 +144,7 @@ function renderCore({
     if (attachedImage) {
         lines.push(
             '# IMAGE ATTACHED TO THIS REPLY',
-            `The image "${attachedImage.id}" is sent automatically right after your messages${attachedImage.viewOnce ? ' as a view-once photo (the customer can open it one time)' : ''}. Mention it briefly and naturally. Do not describe what is in it and do not say you cannot send pictures.`,
+            `The image "${attachedImage.id}" is sent automatically with your messages${attachedImage.viewOnce ? ' as a view-once photo (the customer can open it one time)' : ''}. Mention it briefly and naturally. Do not describe what is in it and do not say you cannot send pictures.`,
             '',
         );
     }

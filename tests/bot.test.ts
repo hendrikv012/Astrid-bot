@@ -260,11 +260,11 @@ describe('Bot pipeline', () => {
     });
 
     it('retries when the model leaks another chat’s identifier', async () => {
-        llm.facts.set(A, [{ key: 'name', value: 'Marieke' }]);
-        await say(A, 'Ik ben Marieke', 'Marieke');
+        llm.facts.set(A, [{ key: 'name', value: 'Marieke Jansen' }]);
+        await say(A, 'Ik ben Marieke Jansen', 'Marieke');
 
         llm.replies.push(
-            () => ({ messages: ['Marieke vroeg dat ook al!'] }),
+            () => ({ messages: ['Marieke Jansen vroeg dat ook al!'] }),
             () => ({ messages: ['Waarmee kan ik je helpen?'] }),
         );
         await say(B, 'hallo', 'Piet');
@@ -277,6 +277,18 @@ describe('Bot pipeline', () => {
             .messages.at(-1)!;
         expect(retry.content).toContain('rejected');
         expect(retry.content).not.toMatch(/marieke/i);
+    });
+
+    it('lets a reply use a common first name another customer also has', async () => {
+        llm.facts.set(A, [{ key: 'name', value: 'Anna' }]);
+        await say(A, 'Ik ben Anna', 'Anna');
+        llm.replies.push(() => ({
+            messages: ['Leuk dat je met Anna komt!'],
+        }));
+        await say(B, 'Ik kom samen met mijn vriendin Anna', 'Piet');
+        expect(sender.sent.at(-1)!.messages).toEqual([
+            'Leuk dat je met Anna komt!',
+        ]);
     });
 
     it('falls back to the SOP template when every attempt is blocked', async () => {
@@ -420,6 +432,7 @@ describe('Bot pipeline', () => {
     });
 
     it('sends a preloaded image once, then not again within the resend window', async () => {
+        await say(A, 'hoi'); // first contact gets the welcome picture
         llm.replies.push(() => ({
             messages: ['Hier!'],
             image_id: 'price_list',
@@ -436,6 +449,7 @@ describe('Bot pipeline', () => {
     });
 
     it('always sends the configured photo as view once when asked for a picture', async () => {
+        await say(A, 'hoi'); // first contact gets the welcome picture
         await say(A, 'Kun je een foto sturen?');
         const plan = sender.sent.at(-1)!;
         expect(plan.image?.id).toBe('photo');
@@ -458,8 +472,30 @@ describe('Bot pipeline', () => {
     });
 
     it('does not attach the photo when nobody asked for one', async () => {
-        await say(A, 'hoi');
+        await say(A, 'hoi'); // first contact gets the welcome picture
+        await say(A, 'hoe gaat het?');
         expect(sender.sent.at(-1)!.image).toBeNull();
+    });
+
+    it('sends the view-once welcome picture first, only to new customers', async () => {
+        await say(A, 'hoi');
+        const first = sender.sent.at(-1)!;
+        expect(first.image?.id).toBe('welcome');
+        expect(first.image?.viewOnce).toBe(true);
+        expect(first.imageFirst).toBe(true);
+        expect(allText(llm.prompts.at(-1)!.messages)).toContain(
+            'IMAGE ATTACHED TO THIS REPLY',
+        );
+
+        await say(A, 'en nog iets');
+        expect(sender.sent.at(-1)!.image).toBeNull();
+
+        // A different new customer gets it too, even if their first message is refused.
+        await say(B, 'Wat vind jij van de verkiezingen?');
+        expect(sender.sent.at(-1)!.image?.id).toBe('welcome');
+        expect(sender.sent.at(-1)!.messages).toEqual([
+            sop.sop.templates.refusal,
+        ]);
     });
 
     it('starts the first_contact flow on the first message', async () => {
