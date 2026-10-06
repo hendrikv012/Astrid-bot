@@ -17,7 +17,7 @@ import {
     type BotReply,
     type PurchaseStage,
 } from '../brain/reply.js';
-import type { ImageLibrary } from '../config/images.js';
+import type { ImageLibrary, PreloadedImage } from '../config/images.js';
 import type { Persona } from '../config/persona.js';
 import { matchesKeyword, type LoadedSop, type SopFlow } from '../config/sop.js';
 import type { Logger } from '../logger.js';
@@ -251,12 +251,15 @@ export class Bot {
         // 2. Generate under the SOP.
         const started = Date.now();
         const activeFlow = this.resolveFlow(mem, turn, combined, batch.length);
+        // An image the customer asked for by keyword is sent by code, not left to the model.
+        const requested = this.requestedImage(mem, combined);
         const reply = await this.generate(
             mem,
             turn,
             combined,
             activeFlow,
             last,
+            requested,
         );
 
         // 3. Purchase alerts go out right away; the customer's reply is paced.
@@ -279,9 +282,11 @@ export class Bot {
         }
 
         // 4. Send like a human (stopping if a human takes over meanwhile), then remember.
-        const image = reply.image_id
-            ? (this.d.images.get(reply.image_id) ?? null)
-            : null;
+        const image =
+            requested ??
+            (reply.image_id
+                ? (this.d.images.get(reply.image_id) ?? null)
+                : null);
         await this.sendAndStore(mem, turn, last.replyJid, {
             messages: reply.messages,
             image,
@@ -358,6 +363,7 @@ export class Bot {
         query: string,
         activeFlow: SopFlow | null,
         last: InboundMessage,
+        attached: PreloadedImage | null = null,
     ): Promise<BotReply> {
         const { llm, images, settings, log } = this.d;
         const { sop } = turn.sop;
@@ -392,16 +398,11 @@ export class Bot {
             log.warn({ err }, 'embedding failed; answering without RAG');
         }
 
-        const now = Date.now();
-        const resendMs = settings.imageResendHours * 3_600_000;
-        const imageOptions = [...images.values()].map((img) => {
-            const lastAt = mem.lastImageSentAt(img.id);
-            return {
-                id: img.id,
-                whenToUse: img.whenToUse,
-                recentlySent: lastAt !== null && now - lastAt < resendMs,
-            };
-        });
+        const imageOptions = [...images.values()].map((img) => ({
+            id: img.id,
+            whenToUse: img.whenToUse,
+            recentlySent: this.sentRecently(mem, img),
+        }));
         const allowedImageIds = new Set(
             imageOptions.filter((i) => !i.recentlySent).map((i) => i.id),
         );
@@ -411,6 +412,9 @@ export class Bot {
             sop,
             activeFlow,
             images: imageOptions,
+            attachedImage: attached
+                ? { id: attached.id, viewOnce: attached.viewOnce }
+                : null,
             chat: {
                 name: last.isGroup ? null : last.pushName,
                 isGroup: last.isGroup,
@@ -494,6 +498,30 @@ export class Bot {
             'falling back to SOP "unknown" template',
         );
         return fallback(sop.templates.unknown);
+    }
+
+    /** Whether this image was sent to the chat within its resend window. */
+    private sentRecently(mem: ChatMemory, img: PreloadedImage): boolean {
+        const hours = img.resendAfterHours ?? this.d.settings.imageResendHours;
+        const lastAt = mem.lastImageSentAt(img.id);
+        return lastAt !== null && Date.now() - lastAt < hours * 3_600_000;
+    }
+
+    /** First image whose request_keywords appear in the customer's messages. */
+    private requestedImage(
+        mem: ChatMemory,
+        text: string,
+    ): PreloadedImage | null {
+        for (const img of this.d.images.values()) {
+            if (
+                img.requestKeywords.length &&
+                matchesKeyword(text, img.requestKeywords) &&
+                !this.sentRecently(mem, img)
+            ) {
+                return img;
+            }
+        }
+        return null;
     }
 
     private resolveFlow(

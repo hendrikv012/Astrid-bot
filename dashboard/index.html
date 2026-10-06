@@ -1557,6 +1557,20 @@
                                       { class: 'muted' },
                                       `When: ${i.whenToUse}`,
                                   ),
+                                  i.viewOnce
+                                      ? el(
+                                            'div',
+                                            { class: 'muted' },
+                                            '👁 Sent as view once',
+                                        )
+                                      : '',
+                                  i.requestKeywords.length
+                                      ? el(
+                                            'div',
+                                            { class: 'muted' },
+                                            `Always sent when a customer says: ${i.requestKeywords.join(', ')}`,
+                                        )
+                                      : '',
                               ),
                           )
                         : [

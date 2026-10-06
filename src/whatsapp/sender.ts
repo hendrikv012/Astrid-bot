@@ -129,6 +129,7 @@ export function createSender(
                     image: image.data,
                     mimetype: image.mimetype,
                     caption: image.caption || undefined,
+                    viewOnce: image.viewOnce || undefined,
                 });
                 sent.push({
                     waMsgId: res?.key.id ?? null,

@@ -16,6 +16,8 @@ export interface PromptInput {
     sop: Sop;
     activeFlow: SopFlow | null;
     images: ImageOption[];
+    /** An image the code already decided to send with this reply (customer asked for it). */
+    attachedImage?: { id: string; viewOnce: boolean } | null;
     chat: { name: string | null; isGroup: boolean };
     facts: Fact[];
     summary: string | null;
@@ -80,7 +82,13 @@ export function buildPrompt(input: PromptInput): ChatMessage[] {
     return [...core, { role: 'system', content: contextMsg }, ...kept];
 }
 
-function renderCore({ persona, sop, activeFlow, images }: PromptInput): string {
+function renderCore({
+    persona,
+    sop,
+    activeFlow,
+    images,
+    attachedImage,
+}: PromptInput): string {
     const lines: string[] = [];
     lines.push('# WHO YOU ARE', persona.text, '');
     lines.push(
@@ -129,6 +137,14 @@ function renderCore({ persona, sop, activeFlow, images }: PromptInput): string {
         activeFlow.steps.forEach((s, i) => lines.push(`${i + 1}. ${s}`));
         lines.push(
             'Set "flow_done": true only in the reply that completes the last step.',
+            '',
+        );
+    }
+
+    if (attachedImage) {
+        lines.push(
+            '# IMAGE ATTACHED TO THIS REPLY',
+            `The image "${attachedImage.id}" is sent automatically right after your messages${attachedImage.viewOnce ? ' as a view-once photo (the customer can open it one time)' : ''}. Mention it briefly and naturally. Do not describe what is in it and do not say you cannot send pictures.`,
             '',
         );
     }

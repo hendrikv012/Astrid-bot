@@ -435,6 +435,33 @@ describe('Bot pipeline', () => {
         expect(sender.sent.at(-1)!.image).toBeNull();
     });
 
+    it('always sends the configured photo as view once when asked for a picture', async () => {
+        await say(A, 'Kun je een foto sturen?');
+        const plan = sender.sent.at(-1)!;
+        expect(plan.image?.id).toBe('photo');
+        expect(plan.image?.viewOnce).toBe(true);
+        expect(allText(llm.prompts.at(-1)!.messages)).toContain(
+            'IMAGE ATTACHED TO THIS REPLY',
+        );
+
+        // resend_after_hours: 0 — asking again sends it again
+        await say(A, 'nog een keer die picture aub');
+        expect(sender.sent.at(-1)!.image?.id).toBe('photo');
+
+        // The model can't swap in another image when a photo was asked for.
+        llm.replies.push(() => ({
+            messages: ['Hier!'],
+            image_id: 'price_list',
+        }));
+        await say(A, 'stuur een foto');
+        expect(sender.sent.at(-1)!.image?.id).toBe('photo');
+    });
+
+    it('does not attach the photo when nobody asked for one', async () => {
+        await say(A, 'hoi');
+        expect(sender.sent.at(-1)!.image).toBeNull();
+    });
+
     it('starts the first_contact flow on the first message', async () => {
         await say(A, 'hoi');
         expect(allText(llm.prompts[0]!.messages)).toContain(

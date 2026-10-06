@@ -26,6 +26,11 @@ describe('shipped config', () => {
             path.join(root, 'assets/images'),
         );
         expect(images.get('price_list')?.data.length).toBeGreaterThan(0);
+        expect(images.get('price_list')?.viewOnce).toBe(false);
+        expect(images.get('photo')).toMatchObject({
+            viewOnce: true,
+            resendAfterHours: 0,
+        });
     });
 });
 

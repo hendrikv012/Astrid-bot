@@ -425,6 +425,8 @@ function buildRoutes(d: DashboardDeps): Route[] {
             id: i.id,
             caption: i.caption,
             whenToUse: i.whenToUse,
+            viewOnce: i.viewOnce,
+            requestKeywords: i.requestKeywords,
             mimetype: i.mimetype,
             bytes: i.data.length,
         })),

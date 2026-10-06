@@ -9,6 +9,18 @@ const ImageEntry = z
         file: z.string().min(1),
         caption: z.string().default(''),
         when_to_use: z.string().min(1),
+        /**
+         * Send as WhatsApp "view once": it opens a single time, can't be
+         * forwarded or saved, and WhatsApp blocks screenshots on most phones.
+         */
+        view_once: z.boolean().default(false),
+        /**
+         * When a customer message contains one of these, this image is sent
+         * by code, whatever the model decides (e.g. "foto", "picture").
+         */
+        request_keywords: z.array(z.string().min(1)).default([]),
+        /** Overrides IMAGE_RESEND_HOURS for this image (0 = send every time). */
+        resend_after_hours: z.number().min(0).max(720).optional(),
     })
     .strict();
 
@@ -18,6 +30,10 @@ export interface PreloadedImage {
     id: string;
     caption: string;
     whenToUse: string;
+    viewOnce: boolean;
+    requestKeywords: string[];
+    /** null = use the global IMAGE_RESEND_HOURS setting. */
+    resendAfterHours: number | null;
     mimetype: string;
     data: Buffer;
 }
@@ -73,6 +89,9 @@ export function loadImages(
             id: entry.id,
             caption: entry.caption,
             whenToUse: entry.when_to_use,
+            viewOnce: entry.view_once,
+            requestKeywords: entry.request_keywords,
+            resendAfterHours: entry.resend_after_hours ?? null,
             mimetype,
             data: fs.readFileSync(file),
         });

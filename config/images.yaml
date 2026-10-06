@@ -6,8 +6,36 @@
 #   file:         path relative to assets/images/ (.jpg, .jpeg, .png, .webp)
 #   caption:      sent with the image (may be empty)
 #   when_to_use:  plain-language rule the model follows
+#   view_once:    true = WhatsApp "view once": opens one time, can't be forwarded
+#                 or saved, and WhatsApp blocks screenshots on most phones
+#   request_keywords: when a customer message contains one of these words, this
+#                 image is sent by code (the model can't forget or pick another)
+#   resend_after_hours: overrides IMAGE_RESEND_HOURS for this image; 0 = send
+#                 it every time it is asked for
 
 - id: price_list
   file: price-list.png
   caption: 'Hier is onze prijslijst 📋'
   when_to_use: The customer asks about prices, rates or what services cost, and has not received the price list recently.
+
+# The one picture sent whenever a customer asks for a photo.
+# REPLACE assets/images/photo.png with your own picture (keep or change the name).
+- id: photo
+  file: photo.png
+  caption: ''
+  when_to_use: The customer asks for a photo, picture or pic.
+  view_once: true
+  request_keywords:
+      [
+          foto,
+          fotos,
+          fotootje,
+          plaatje,
+          picture,
+          pictures,
+          photo,
+          photos,
+          pic,
+          pics,
+      ]
+  resend_after_hours: 0

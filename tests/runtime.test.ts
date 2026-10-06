@@ -80,6 +80,26 @@ describe('sender', () => {
         expect(sent).toHaveLength(1);
     });
 
+    it('sends view-once images as view once', async () => {
+        const { sock, sent } = fakeSock();
+        const sender = createSender(() => sock, { humanize: false, typing });
+        await sender.send({
+            replyJid: 'x@s.whatsapp.net',
+            messages: ['Hier is de foto'],
+            image: {
+                id: 'photo',
+                caption: '',
+                whenToUse: '',
+                viewOnce: true,
+                requestKeywords: [],
+                resendAfterHours: 0,
+                mimetype: 'image/png',
+                data: Buffer.from([1]),
+            },
+        });
+        expect(sent[1]).toMatchObject({ viewOnce: true });
+    });
+
     it('returns the message id from sendRaw', async () => {
         const { sock } = fakeSock();
         const sender = createSender(() => sock, { humanize: false, typing });
