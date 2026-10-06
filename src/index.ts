@@ -66,15 +66,29 @@ async function main(): Promise<void> {
     const chatModels = await llm.listChatModels();
     const usable = (m: string) => chatModels.some((c) => sameModel(c, m));
     const chosen = runtime.get().chatModel;
+    const chatModelSet = !!process.env.CHAT_MODEL?.trim();
     if (!usable(chosen)) {
         if (chosen !== env.CHAT_MODEL && usable(env.CHAT_MODEL)) {
             logger.warn(
                 `Chat model "${chosen}" picked in the dashboard is not installed; falling back to CHAT_MODEL "${env.CHAT_MODEL}".`,
             );
             runtime.set({ ...runtime.get(), chatModel: env.CHAT_MODEL });
+        } else if (!chatModelSet && chatModels.length === 1) {
+            // No CHAT_MODEL in .env and only one chat model installed: use it.
+            logger.warn(
+                `CHAT_MODEL is not set in .env; using the only installed chat model "${chatModels[0]}".`,
+            );
+            runtime.set({ ...runtime.get(), chatModel: chatModels[0]! });
         } else {
+            const installed = chatModels.length
+                ? `Installed chat models: ${chatModels.join(', ')}. Put one of these in .env as CHAT_MODEL=<name>`
+                : 'No chat models are installed in Ollama (ollama list)';
             throw new Error(
-                `Chat model "${chosen}" is not installed in Ollama (or can't chat). Run: ollama pull ${chosen}`,
+                `Chat model "${chosen}" is not installed in Ollama (or can't chat)` +
+                    (chatModelSet
+                        ? ''
+                        : ` — CHAT_MODEL is not set in .env (run from the folder that has .env)`) +
+                    `. ${installed}.`,
             );
         }
     }
