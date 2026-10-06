@@ -19,6 +19,7 @@ npx vitest run tests/bot.test.ts   # one file
 npx vitest run -t "isolation"      # tests matching a name
 npm run ingest                     # sync knowledge/ into the DB (needs Ollama)
 npm run loadtest -- --fake-llm     # throughput test through the real pipeline (or real Ollama without --fake-llm)
+npm run chat                       # terminal sandbox: real pipeline + Ollama, no WhatsApp, no waits, throwaway DB
 npm run start:pm2                  # production: build + run as pm2 process "astrid" (ecosystem.config.cjs; pm2 installed globally)
 ```
 

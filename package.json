@@ -18,6 +18,7 @@
         "typecheck": "tsc --noEmit",
         "ingest": "tsx src/rag/ingest.ts",
         "loadtest": "tsx src/tools/loadtest.ts",
+        "chat": "tsx src/tools/chat.ts",
         "test": "vitest run",
         "test:watch": "vitest",
         "lint": "eslint .",

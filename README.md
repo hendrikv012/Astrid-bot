@@ -41,6 +41,8 @@ Testing:
 - Every incoming message is logged (`message received`, `replying`, `reply sent`), or with the reason it was ignored.
 - Right after linking, Baileys may log `failed to decrypt` once per contact; WhatsApp resends those messages automatically.
 - Optional: set `ALLOWED_JIDS` to your own number so the bot answers nobody else.
+- `npm run chat` chats with the bot in the terminal, without WhatsApp and without any waiting. It uses the real pipeline and model, shows each step and the model's raw output as it is written, and uses a throwaway database.
+- `HUMANIZE=false` turns off every human-like wait (first-reply delay, reading, thinking, typing); add `DEBOUNCE_MS=0` to also skip the short wait for follow-up messages.
 
 ## Customizing
 

@@ -45,6 +45,8 @@ export interface OllamaLlmOptions {
         seconds: number;
     }) => void;
     progressEveryMs?: number;
+    /** Receives the model's output as it is written (sandbox). */
+    onChunk?: (text: string) => void;
     /** Called after each chat call with how long the model took. */
     onChatDone?: (info: { model: string; ms: number }) => void;
     /** For tests: a stand-in for the Ollama client. */
@@ -126,6 +128,7 @@ export class OllamaLlm implements LlmClient {
         try {
             for await (const part of stream) {
                 content += part.message.content;
+                this.opts.onChunk?.(part.message.content);
                 // Small models under a JSON grammar sometimes emit whitespace forever.
                 if (
                     content.length >= STUCK_WHITESPACE &&
