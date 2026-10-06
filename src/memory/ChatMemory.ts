@@ -10,6 +10,8 @@ export interface StoredMessage {
     text: string;
     imageId: string | null;
     ts: number;
+    /** SOP version that produced a bot reply; 'human' for operator messages. */
+    sopHash: string | null;
 }
 
 export interface Fact {
@@ -39,6 +41,7 @@ interface MessageRow {
     text: string;
     image_id: string | null;
     ts: number;
+    sop_hash: string | null;
 }
 
 const toMessage = (r: MessageRow): StoredMessage => ({
@@ -49,9 +52,11 @@ const toMessage = (r: MessageRow): StoredMessage => ({
     text: r.text,
     imageId: r.image_id,
     ts: r.ts,
+    sopHash: r.sop_hash,
 });
 
-const MESSAGE_COLS = 'id, wa_msg_id, sender_jid, direction, text, image_id, ts';
+const MESSAGE_COLS =
+    'id, wa_msg_id, sender_jid, direction, text, image_id, ts, sop_hash';
 
 /**
  * All memory access for exactly ONE chat.

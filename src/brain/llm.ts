@@ -31,8 +31,24 @@ export interface OllamaLlmOptions {
 export class OllamaLlm implements LlmClient {
     private readonly client: Ollama;
 
-    constructor(private readonly opts: OllamaLlmOptions) {
+    private readonly opts: OllamaLlmOptions;
+
+    constructor(opts: OllamaLlmOptions) {
+        this.opts = { ...opts };
         this.client = new Ollama({ host: opts.host });
+    }
+
+    /** Live-tune generation (dashboard). Takes effect on the next call. */
+    setOptions(
+        patch: Partial<Pick<OllamaLlmOptions, 'chatModel' | 'temperature'>>,
+    ): void {
+        Object.assign(this.opts, patch);
+    }
+
+    /** Names of models installed in Ollama. */
+    async listModels(): Promise<string[]> {
+        const { models } = await this.client.list();
+        return models.map((m) => m.name);
     }
 
     async chatJson<T>(

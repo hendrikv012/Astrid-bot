@@ -21,8 +21,19 @@ export interface ConnectionOptions {
     onMessages: (messages: WAMessage[]) => void;
 }
 
+export type ConnectionStatus =
+    'connecting' | 'waiting_for_qr' | 'open' | 'reconnecting' | 'logged_out';
+
+export interface ConnectionState {
+    status: ConnectionStatus;
+    /** Latest QR rendered as text (for the dashboard), while waiting for a scan. */
+    qrText: string | null;
+    user: string | null;
+}
+
 export interface Connection {
     getSock: () => WASocket | null;
+    state: () => ConnectionState;
     self: () => SelfIds;
     close: () => Promise<void>;
 }
@@ -47,6 +58,11 @@ export async function startConnection(
     const sentCache = new Map<string, proto.IMessage>();
 
     let sock: WASocket | null = null;
+    const connState: ConnectionState = {
+        status: 'connecting',
+        qrText: null,
+        user: null,
+    };
     let stopped = false;
     let attempt = 0;
 
@@ -84,10 +100,17 @@ export async function startConnection(
 
         s.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
             if (qr && !opts.pairingNumber) {
+                connState.status = 'waiting_for_qr';
+                qrcode.generate(qr, { small: true }, (text) => {
+                    connState.qrText = text;
+                });
                 log.info('Scan this QR code with WhatsApp → Linked devices:');
                 qrcode.generate(qr, { small: true });
             }
             if (connection === 'open') {
+                connState.status = 'open';
+                connState.qrText = null;
+                connState.user = s.user?.id ?? null;
                 attempt = 0;
                 log.info({ user: s.user?.id }, 'WhatsApp connected');
             }
@@ -96,7 +119,9 @@ export async function startConnection(
                     lastDisconnect?.error as
                         { output?: { statusCode?: number } } | undefined
                 )?.output?.statusCode;
+                connState.status = 'reconnecting';
                 if (code === DisconnectReason.loggedOut) {
+                    connState.status = 'logged_out';
                     log.error(
                         `Logged out of WhatsApp. Delete ${opts.authDir} and restart to link again.`,
                     );
@@ -140,6 +165,7 @@ export async function startConnection(
 
     return {
         getSock: () => sock,
+        state: () => ({ ...connState }),
         self: () => ({
             pn: sock?.user?.id ? jidNormalizedUser(sock.user.id) : null,
             lid: sock?.user?.lid ? jidNormalizedUser(sock.user.lid) : null,

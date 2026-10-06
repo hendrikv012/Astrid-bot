@@ -36,6 +36,11 @@ const EnvSchema = z.object({
     ALLOWED_JIDS: csv.default([]),
     REPLY_IN_GROUPS: bool.default(false),
 
+    DASHBOARD_ENABLED: bool.default(true),
+    DASHBOARD_HOST: z.string().default('127.0.0.1'),
+    DASHBOARD_PORT: z.coerce.number().int().min(0).max(65535).default(3210),
+    DASHBOARD_TOKEN: z.string().min(16).optional(),
+
     HUMANIZE: bool.default(true),
     TYPING_CPS_MIN: z.coerce.number().positive().default(5),
     TYPING_CPS_MAX: z.coerce.number().positive().default(7),

@@ -1,0 +1,1523 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Astrid Dashboard</title>
+        <link rel="icon" href="data:," />
+        <style>
+            :root {
+                --bg: #f6f7f9;
+                --panel: #ffffff;
+                --text: #1d2330;
+                --muted: #6b7385;
+                --border: #e3e6ec;
+                --accent: #1f8a70;
+                --accent-text: #ffffff;
+                --in: #ffffff;
+                --out: #dcf5e9;
+                --human: #fff3d6;
+                --warn: #b45309;
+                --warn-bg: #fff4e5;
+                --err: #b42318;
+                --err-bg: #fdecea;
+                --ok: #1f8a70;
+                --chat-bg: #eef0f3;
+                --mono:
+                    ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            }
+            @media (prefers-color-scheme: dark) {
+                :root {
+                    --bg: #12151b;
+                    --panel: #1a1f27;
+                    --text: #e6e9ef;
+                    --muted: #9099ab;
+                    --border: #2a313d;
+                    --accent: #3fb68f;
+                    --accent-text: #0d1512;
+                    --in: #222833;
+                    --out: #17392e;
+                    --human: #3a3017;
+                    --warn: #f0b35a;
+                    --warn-bg: #33281a;
+                    --err: #f28b82;
+                    --err-bg: #3a1f1d;
+                    --ok: #3fb68f;
+                    --chat-bg: #151a21;
+                }
+            }
+            * {
+                box-sizing: border-box;
+            }
+            input[type='range'],
+            input[type='checkbox'] {
+                accent-color: var(--accent);
+            }
+            body {
+                margin: 0;
+                font:
+                    14px/1.45 system-ui,
+                    -apple-system,
+                    'Segoe UI',
+                    sans-serif;
+                background: var(--bg);
+                color: var(--text);
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+            }
+            header {
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                padding: 10px 16px;
+                background: var(--panel);
+                border-bottom: 1px solid var(--border);
+            }
+            header h1 {
+                font-size: 16px;
+                margin: 0;
+            }
+            nav {
+                display: flex;
+                gap: 4px;
+                flex-wrap: wrap;
+            }
+            nav button {
+                background: none;
+                border: 0;
+                color: var(--muted);
+                padding: 6px 10px;
+                border-radius: 6px;
+                cursor: pointer;
+                font: inherit;
+            }
+            nav button.active {
+                background: var(--bg);
+                color: var(--text);
+                font-weight: 600;
+            }
+            .pill {
+                margin-left: auto;
+                font-size: 12px;
+                padding: 3px 10px;
+                border-radius: 999px;
+                border: 1px solid var(--border);
+                color: var(--muted);
+                white-space: nowrap;
+            }
+            .pill.open {
+                color: var(--ok);
+                border-color: var(--ok);
+            }
+            main {
+                flex: 1;
+                min-height: 0;
+                overflow: auto;
+            }
+            section {
+                display: none;
+                height: 100%;
+            }
+            section.active {
+                display: block;
+            }
+            .pad {
+                padding: 16px;
+                max-width: 1100px;
+            }
+            button.primary,
+            button.secondary,
+            button.danger {
+                font: inherit;
+                padding: 6px 12px;
+                border-radius: 6px;
+                cursor: pointer;
+                border: 1px solid var(--border);
+                background: var(--panel);
+                color: var(--text);
+            }
+            button.primary {
+                background: var(--accent);
+                border-color: var(--accent);
+                color: var(--accent-text);
+                font-weight: 600;
+            }
+            button.danger {
+                color: var(--err);
+            }
+            button:disabled {
+                opacity: 0.5;
+                cursor: default;
+            }
+            input,
+            select,
+            textarea {
+                font: inherit;
+                color: var(--text);
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                padding: 6px 8px;
+            }
+            textarea.code {
+                width: 100%;
+                min-height: 60vh;
+                font: 13px/1.5 var(--mono);
+                resize: vertical;
+                tab-size: 4;
+            }
+            .row {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                flex-wrap: wrap;
+                margin: 8px 0;
+            }
+            .muted {
+                color: var(--muted);
+            }
+            .msg {
+                white-space: pre-wrap;
+                padding: 8px 10px;
+                border-radius: 6px;
+                margin: 8px 0;
+                font-size: 13px;
+            }
+            .msg.err {
+                background: var(--err-bg);
+                color: var(--err);
+                font-family: var(--mono);
+            }
+            .msg.ok {
+                background: var(--out);
+            }
+            .msg.warn {
+                background: var(--warn-bg);
+                color: var(--warn);
+            }
+            /* chats */
+            .chats {
+                display: grid;
+                grid-template-columns: 300px 1fr 280px;
+                height: 100%;
+            }
+            .chatlist {
+                border-right: 1px solid var(--border);
+                overflow: auto;
+                background: var(--panel);
+            }
+            .chatlist input {
+                width: calc(100% - 16px);
+                margin: 8px;
+            }
+            .chatitem {
+                padding: 10px 12px;
+                border-bottom: 1px solid var(--border);
+                cursor: pointer;
+            }
+            .chatitem.active {
+                background: var(--bg);
+            }
+            .chatitem .name {
+                font-weight: 600;
+                display: flex;
+                gap: 6px;
+                align-items: center;
+            }
+            .chatitem .preview {
+                color: var(--muted);
+                font-size: 12px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .tag {
+                font-size: 11px;
+                font-weight: 500;
+                padding: 0 6px;
+                border-radius: 4px;
+                background: var(--warn-bg);
+                color: var(--warn);
+            }
+            .conv {
+                display: flex;
+                flex-direction: column;
+                min-height: 0;
+                background: var(--chat-bg);
+            }
+            .convhead {
+                padding: 10px 14px;
+                background: var(--panel);
+                border-bottom: 1px solid var(--border);
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                flex-wrap: wrap;
+            }
+            .bubbles {
+                flex: 1;
+                overflow: auto;
+                padding: 14px;
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }
+            .bubble {
+                max-width: 70%;
+                padding: 6px 10px;
+                border-radius: 8px;
+                background: var(--in);
+                white-space: pre-wrap;
+                word-wrap: break-word;
+                border: 1px solid var(--border);
+            }
+            .bubble.out {
+                align-self: flex-end;
+                background: var(--out);
+            }
+            .bubble.human {
+                background: var(--human);
+            }
+            .bubble .meta {
+                font-size: 11px;
+                color: var(--muted);
+                margin-top: 2px;
+            }
+            .bubble img {
+                max-width: 220px;
+                display: block;
+                border-radius: 6px;
+            }
+            .composer {
+                display: flex;
+                gap: 8px;
+                padding: 10px;
+                background: var(--panel);
+                border-top: 1px solid var(--border);
+            }
+            .composer textarea {
+                flex: 1;
+                resize: none;
+                height: 40px;
+            }
+            .side {
+                border-left: 1px solid var(--border);
+                padding: 12px;
+                overflow: auto;
+                background: var(--panel);
+            }
+            .side h3 {
+                font-size: 13px;
+                margin: 12px 0 6px;
+            }
+            .fact {
+                display: flex;
+                justify-content: space-between;
+                gap: 6px;
+                font-size: 13px;
+                padding: 4px 0;
+                border-bottom: 1px solid var(--border);
+            }
+            .fact button {
+                border: 0;
+                background: none;
+                color: var(--muted);
+                cursor: pointer;
+            }
+            .empty {
+                color: var(--muted);
+                padding: 40px;
+                text-align: center;
+            }
+            /* settings */
+            fieldset {
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                margin: 0 0 16px;
+                padding: 12px 16px;
+                background: var(--panel);
+            }
+            legend {
+                font-weight: 600;
+                padding: 0 6px;
+            }
+            .field {
+                display: grid;
+                grid-template-columns: 240px 1fr;
+                gap: 12px;
+                align-items: center;
+                padding: 6px 0;
+            }
+            .field small {
+                display: block;
+                color: var(--muted);
+            }
+            .field .ctl {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+            }
+            .field input[type='range'] {
+                flex: 1;
+                max-width: 320px;
+            }
+            .field input[type='number'] {
+                width: 100px;
+            }
+            /* status */
+            .tiles {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                gap: 12px;
+                margin: 12px 0;
+            }
+            .tile {
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 12px;
+            }
+            .tile .n {
+                font-size: 24px;
+                font-weight: 600;
+            }
+            .tile .l {
+                color: var(--muted);
+                font-size: 12px;
+            }
+            pre.qr {
+                font: 8px/8px var(--mono);
+                background: #fff;
+                color: #000;
+                display: inline-block;
+                padding: 8px;
+            }
+            .kb {
+                display: grid;
+                grid-template-columns: 260px 1fr;
+                gap: 16px;
+            }
+            .filelist div {
+                padding: 6px 8px;
+                border-radius: 6px;
+                cursor: pointer;
+            }
+            .filelist div.active {
+                background: var(--panel);
+                font-weight: 600;
+            }
+            .images {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+                gap: 12px;
+            }
+            .images img {
+                width: 100%;
+                border-radius: 6px;
+                border: 1px solid var(--border);
+            }
+            #login {
+                max-width: 420px;
+                margin: 80px auto;
+                padding: 24px;
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+            }
+            #login input {
+                width: 100%;
+                margin: 8px 0;
+            }
+            @media (max-width: 900px) {
+                .chats {
+                    grid-template-columns: 1fr;
+                    height: auto;
+                }
+                .side,
+                .chatlist {
+                    border: 0;
+                }
+                .field,
+                .kb {
+                    grid-template-columns: 1fr;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div id="login" hidden>
+            <h2>Astrid dashboard</h2>
+            <p class="muted">
+                Paste the dashboard token from the bot's startup log (the link
+                printed after "Dashboard:").
+            </p>
+            <input id="tokenInput" type="password" placeholder="token" />
+            <button class="primary" id="tokenSave">Open</button>
+            <div id="loginErr"></div>
+        </div>
+
+        <header id="top" hidden>
+            <h1 id="title">Astrid</h1>
+            <nav id="nav">
+                <button data-tab="chats" class="active">Chats</button>
+                <button data-tab="sop">SOP</button>
+                <button data-tab="persona">Persona</button>
+                <button data-tab="settings">Settings</button>
+                <button data-tab="knowledge">Knowledge</button>
+                <button data-tab="images">Images</button>
+                <button data-tab="status">Status</button>
+            </nav>
+            <span class="pill" id="connPill">…</span>
+        </header>
+
+        <main id="app" hidden>
+            <section id="tab-chats" class="active">
+                <div class="chats">
+                    <div class="chatlist">
+                        <input
+                            id="chatSearch"
+                            placeholder="Search name or number"
+                        />
+                        <div id="chatItems"></div>
+                    </div>
+                    <div class="conv">
+                        <div class="convhead" id="convHead">
+                            <span class="muted">Select a chat</span>
+                        </div>
+                        <div class="bubbles" id="bubbles"></div>
+                        <div class="composer" id="composer" hidden>
+                            <textarea
+                                id="sendText"
+                                placeholder="Reply as a human (pauses the bot in this chat)"
+                            ></textarea>
+                            <button class="primary" id="sendBtn">Send</button>
+                        </div>
+                    </div>
+                    <div class="side" id="side"></div>
+                </div>
+            </section>
+
+            <section id="tab-sop">
+                <div class="pad">
+                    <div class="row">
+                        <button class="primary" id="sopSave">
+                            Validate &amp; save
+                        </button>
+                        <button class="secondary" id="sopReload">
+                            Reload from disk
+                        </button>
+                        <span class="muted" id="sopHash"></span>
+                    </div>
+                    <div id="sopMsg"></div>
+                    <textarea
+                        class="code"
+                        id="sopText"
+                        spellcheck="false"
+                    ></textarea>
+                    <p class="muted">
+                        Saved changes are validated first and apply from the
+                        next reply. An invalid SOP is never saved.
+                    </p>
+                </div>
+            </section>
+
+            <section id="tab-persona">
+                <div class="pad">
+                    <div class="row">
+                        <button class="primary" id="personaSave">Save</button>
+                        <button class="secondary" id="personaReload">
+                            Reload from disk
+                        </button>
+                    </div>
+                    <div id="personaMsg"></div>
+                    <textarea
+                        class="code"
+                        id="personaText"
+                        spellcheck="false"
+                    ></textarea>
+                    <p class="muted">
+                        Example conversations go under "## Examples" as "User:"
+                        and "<span id="botNameHint">Astrid</span>:" lines.
+                    </p>
+                </div>
+            </section>
+
+            <section id="tab-settings">
+                <div class="pad">
+                    <div id="settingsForm"></div>
+                    <div class="row">
+                        <button class="primary" id="settingsSave">
+                            Save settings
+                        </button>
+                        <button class="secondary" id="settingsReset">
+                            Discard changes
+                        </button>
+                    </div>
+                    <div id="settingsMsg"></div>
+                </div>
+            </section>
+
+            <section id="tab-knowledge">
+                <div class="pad">
+                    <div class="row">
+                        <button class="primary" id="kbReingest">
+                            Re-ingest knowledge
+                        </button>
+                        <button class="secondary" id="kbNew">New file</button>
+                        <span class="muted" id="kbInfo"></span>
+                    </div>
+                    <div id="kbMsg"></div>
+                    <div class="kb">
+                        <div class="filelist" id="kbFiles"></div>
+                        <div>
+                            <div class="row">
+                                <strong id="kbPath" class="muted"
+                                    >No file selected</strong
+                                >
+                                <button class="primary" id="kbSave" disabled>
+                                    Save file
+                                </button>
+                                <button class="danger" id="kbDelete" disabled>
+                                    Delete
+                                </button>
+                            </div>
+                            <textarea
+                                class="code"
+                                id="kbText"
+                                spellcheck="false"
+                                disabled
+                            ></textarea>
+                            <p class="muted">
+                                After saving, press "Re-ingest knowledge" so the
+                                bot can search the new text.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="tab-images">
+                <div class="pad">
+                    <p class="muted">
+                        Images are configured in config/images.yaml and
+                        assets/images/ (restart the bot after changing them).
+                    </p>
+                    <div class="images" id="imageGrid"></div>
+                </div>
+            </section>
+
+            <section id="tab-status">
+                <div class="pad">
+                    <div id="statusConn"></div>
+                    <div class="tiles" id="statusTiles"></div>
+                    <div id="statusQr"></div>
+                </div>
+            </section>
+        </main>
+
+        <script>
+            'use strict';
+            // ---------- helpers ----------
+            const $ = (id) => document.getElementById(id);
+            const el = (tag, props = {}, ...children) => {
+                const node = document.createElement(tag);
+                for (const [k, v] of Object.entries(props)) {
+                    if (k === 'class') node.className = v;
+                    else if (k.startsWith('on'))
+                        node.addEventListener(k.slice(2), v);
+                    else if (v !== undefined && v !== null)
+                        node.setAttribute(k, v);
+                }
+                for (const c of children.flat()) {
+                    if (c === null || c === undefined || c === false) continue;
+                    node.append(
+                        c instanceof Node
+                            ? c
+                            : document.createTextNode(String(c)),
+                    );
+                }
+                return node;
+            };
+            const fmtTime = (ts) =>
+                ts
+                    ? new Date(ts).toLocaleString([], {
+                          dateStyle: 'short',
+                          timeStyle: 'short',
+                      })
+                    : '';
+            const number = (jid) => jid.split('@')[0];
+
+            let token = '';
+            try {
+                const fromHash = new URLSearchParams(
+                    location.hash.slice(1),
+                ).get('token');
+                if (fromHash) {
+                    localStorage.setItem('astridToken', fromHash);
+                    history.replaceState(null, '', location.pathname);
+                }
+                token = fromHash || localStorage.getItem('astridToken') || '';
+            } catch {
+                token =
+                    new URLSearchParams(location.hash.slice(1)).get('token') ||
+                    '';
+            }
+
+            async function api(method, url, body) {
+                const res = await fetch(url, {
+                    method,
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        ...(body !== undefined
+                            ? { 'Content-Type': 'application/json' }
+                            : {}),
+                    },
+                    body: body !== undefined ? JSON.stringify(body) : undefined,
+                });
+                const data = await res.json().catch(() => ({}));
+                if (res.status === 401) {
+                    showLogin('Token rejected.');
+                    throw new Error('unauthorized');
+                }
+                if (!res.ok)
+                    throw new Error(data.error || `HTTP ${res.status}`);
+                return data;
+            }
+
+            function flash(target, kind, text) {
+                const box = $(target);
+                box.replaceChildren(el('div', { class: `msg ${kind}` }, text));
+                if (kind === 'ok')
+                    setTimeout(() => box.replaceChildren(), 4000);
+            }
+
+            function showLogin(err) {
+                $('login').hidden = false;
+                $('top').hidden = true;
+                $('app').hidden = true;
+                if (err)
+                    $('loginErr').replaceChildren(
+                        el('div', { class: 'msg err' }, err),
+                    );
+            }
+
+            $('tokenSave').onclick = () => {
+                token = $('tokenInput').value.trim();
+                try {
+                    localStorage.setItem('astridToken', token);
+                } catch {}
+                start();
+            };
+
+            // ---------- tabs ----------
+            const loaders = {};
+            let currentTab = 'chats';
+            $('nav').addEventListener('click', (e) => {
+                const tab = e.target.dataset?.tab;
+                if (!tab) return;
+                currentTab = tab;
+                for (const b of $('nav').children)
+                    b.classList.toggle('active', b.dataset.tab === tab);
+                for (const s of document.querySelectorAll('section'))
+                    s.classList.toggle('active', s.id === `tab-${tab}`);
+                loaders[tab]?.();
+            });
+
+            // ---------- status ----------
+            const STATUS_LABEL = {
+                open: 'WhatsApp connected',
+                connecting: 'Connecting…',
+                waiting_for_qr: 'Waiting for QR scan',
+                reconnecting: 'Reconnecting…',
+                logged_out: 'Logged out',
+            };
+            async function refreshStatus() {
+                const s = await api('GET', '/api/status');
+                $('title').textContent = `${s.botName} dashboard`;
+                $('botNameHint').textContent = s.botName;
+                const pill = $('connPill');
+                pill.textContent =
+                    STATUS_LABEL[s.connection.status] || s.connection.status;
+                pill.className = `pill ${s.connection.status === 'open' ? 'open' : ''}`;
+                if (currentTab === 'status') renderStatus(s);
+                return s;
+            }
+            function renderStatus(s) {
+                $('statusConn').replaceChildren(
+                    el(
+                        'h2',
+                        {},
+                        STATUS_LABEL[s.connection.status] ||
+                            s.connection.status,
+                    ),
+                    s.connection.user
+                        ? el(
+                              'p',
+                              { class: 'muted' },
+                              `Logged in as ${number(s.connection.user)}`,
+                          )
+                        : null,
+                    el('p', { class: 'muted' }, `SOP version ${s.sopHash}`),
+                );
+                const t = s.stats;
+                const tile = (n, l) =>
+                    el(
+                        'div',
+                        { class: 'tile' },
+                        el('div', { class: 'n' }, n),
+                        el('div', { class: 'l' }, l),
+                    );
+                $('statusTiles').replaceChildren(
+                    tile(t.chats, 'chats'),
+                    tile(t.messagesToday, 'messages received today'),
+                    tile(t.repliesToday, 'messages sent today'),
+                    tile(t.escalationsToday, 'escalations today'),
+                    tile(t.pausedChats, 'chats paused'),
+                    tile(
+                        `${t.kbDocuments} / ${t.kbChunks}`,
+                        'knowledge files / chunks',
+                    ),
+                );
+                $('statusQr').replaceChildren(
+                    s.connection.qrText
+                        ? el(
+                              'div',
+                              {},
+                              el(
+                                  'p',
+                                  {},
+                                  'Scan with WhatsApp → Linked devices:',
+                              ),
+                              el('pre', { class: 'qr' }, s.connection.qrText),
+                          )
+                        : '',
+                );
+            }
+            loaders.status = refreshStatus;
+
+            // ---------- chats ----------
+            let selectedChat = null;
+            const chatNames = new Map();
+            let lastMsgCount = -1;
+            async function loadChats() {
+                const q = $('chatSearch').value.trim();
+                const { chats } = await api(
+                    'GET',
+                    `/api/chats?q=${encodeURIComponent(q)}`,
+                );
+                const now = Date.now();
+                for (const c of chats) chatNames.set(c.jid, c.name);
+                $('chatItems').replaceChildren(
+                    ...(chats.length
+                        ? chats.map((c) =>
+                              el(
+                                  'div',
+                                  {
+                                      class: `chatitem ${c.jid === selectedChat ? 'active' : ''}`,
+                                      onclick: () => openChat(c.jid),
+                                  },
+                                  el(
+                                      'div',
+                                      { class: 'name' },
+                                      c.name || number(c.jid),
+                                      c.isGroup
+                                          ? el(
+                                                'span',
+                                                { class: 'tag' },
+                                                'group',
+                                            )
+                                          : null,
+                                      c.pausedUntil > now
+                                          ? el(
+                                                'span',
+                                                { class: 'tag' },
+                                                'paused',
+                                            )
+                                          : null,
+                                      c.escalations
+                                          ? el(
+                                                'span',
+                                                { class: 'tag' },
+                                                `${c.escalations}⚠`,
+                                            )
+                                          : null,
+                                  ),
+                                  el(
+                                      'div',
+                                      { class: 'preview' },
+                                      `${c.lastDirection === 'out' ? '↩ ' : ''}${c.lastText || ''}`,
+                                  ),
+                                  el(
+                                      'div',
+                                      { class: 'preview' },
+                                      fmtTime(c.lastSeen),
+                                  ),
+                              ),
+                          )
+                        : [el('div', { class: 'empty' }, 'No chats yet')]),
+                );
+            }
+            $('chatSearch').addEventListener('input', () => loadChats());
+
+            async function openChat(jid) {
+                if (selectedChat !== jid) lastMsgCount = -1;
+                selectedChat = jid;
+                await Promise.all([loadChats(), loadChat()]);
+            }
+
+            async function loadChat() {
+                if (!selectedChat) return;
+                const c = await api(
+                    'GET',
+                    `/api/chats/${encodeURIComponent(selectedChat)}`,
+                );
+                const now = Date.now();
+                const paused = c.pausedUntil > now;
+
+                $('convHead').replaceChildren(
+                    el('strong', {}, chatNames.get(c.jid) || number(c.jid)),
+                    chatNames.get(c.jid)
+                        ? el('span', { class: 'muted' }, `+${number(c.jid)}`)
+                        : null,
+                    paused
+                        ? el(
+                              'span',
+                              { class: 'tag' },
+                              `bot paused until ${fmtTime(c.pausedUntil)}`,
+                          )
+                        : el('span', { class: 'muted' }, 'bot active'),
+                    el('span', { style: 'flex:1' }),
+                    paused
+                        ? el(
+                              'button',
+                              {
+                                  class: 'secondary',
+                                  onclick: () => chatAction('resume'),
+                              },
+                              'Resume bot',
+                          )
+                        : el(
+                              'button',
+                              {
+                                  class: 'secondary',
+                                  onclick: () =>
+                                      chatAction('pause', { minutes: 60 }),
+                              },
+                              'Pause 1h',
+                          ),
+                    paused
+                        ? null
+                        : el(
+                              'button',
+                              {
+                                  class: 'secondary',
+                                  onclick: () =>
+                                      chatAction('pause', { minutes: null }),
+                              },
+                              'Pause indefinitely',
+                          ),
+                );
+
+                const box = $('bubbles');
+                const atBottom =
+                    box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+                box.replaceChildren(
+                    ...c.messages.map((m) => {
+                        const human =
+                            m.direction === 'out' && m.sopHash === 'human';
+                        return el(
+                            'div',
+                            {
+                                class: `bubble ${m.direction === 'out' ? 'out' : ''} ${human ? 'human' : ''}`,
+                            },
+                            m.imageId
+                                ? el('img', {
+                                      src: `/api/images/${encodeURIComponent(m.imageId)}?token=${encodeURIComponent(token)}`,
+                                      alt: m.imageId,
+                                  })
+                                : null,
+                            m.text,
+                            el('div', { class: 'meta' }, fmtTime(m.ts)),
+                        );
+                    }),
+                );
+                if (atBottom || lastMsgCount !== c.messages.length)
+                    box.scrollTop = box.scrollHeight;
+                lastMsgCount = c.messages.length;
+                $('composer').hidden = false;
+
+                $('side').replaceChildren(
+                    el('h3', {}, 'Known facts (this chat only)'),
+                    ...(c.facts.length
+                        ? c.facts.map((f) =>
+                              el(
+                                  'div',
+                                  { class: 'fact' },
+                                  el(
+                                      'span',
+                                      {},
+                                      el('strong', {}, f.key),
+                                      f.subject === 'chat'
+                                          ? ''
+                                          : ` (${number(f.subject)})`,
+                                      `: ${f.value}`,
+                                  ),
+                                  el(
+                                      'button',
+                                      {
+                                          title: 'Forget this fact',
+                                          onclick: async () => {
+                                              if (
+                                                  !confirm(
+                                                      `Forget "${f.key}: ${f.value}"?`,
+                                                  )
+                                              )
+                                                  return;
+                                              await api(
+                                                  'DELETE',
+                                                  `/api/chats/${encodeURIComponent(c.jid)}/facts?subject=${encodeURIComponent(f.subject)}&key=${encodeURIComponent(f.key)}`,
+                                              );
+                                              loadChat();
+                                          },
+                                      },
+                                      '✕',
+                                  ),
+                              ),
+                          )
+                        : [el('div', { class: 'muted' }, 'None yet')]),
+                    el('h3', {}, 'Summary of earlier conversation'),
+                    el(
+                        'div',
+                        { class: c.summary ? '' : 'muted' },
+                        c.summary?.summary || 'None yet',
+                    ),
+                    el('h3', {}, 'Active SOP procedure'),
+                    c.flowState
+                        ? el(
+                              'div',
+                              { class: 'row' },
+                              el('span', {}, c.flowState),
+                              el(
+                                  'button',
+                                  {
+                                      class: 'secondary',
+                                      onclick: async () => {
+                                          await api(
+                                              'DELETE',
+                                              `/api/chats/${encodeURIComponent(c.jid)}/flow`,
+                                          );
+                                          loadChat();
+                                      },
+                                  },
+                                  'Clear',
+                              ),
+                          )
+                        : el('div', { class: 'muted' }, 'None'),
+                );
+            }
+
+            async function chatAction(action, body = {}) {
+                await api(
+                    'POST',
+                    `/api/chats/${encodeURIComponent(selectedChat)}/${action}`,
+                    body,
+                );
+                await Promise.all([loadChat(), loadChats()]);
+            }
+
+            $('sendBtn').onclick = async () => {
+                const text = $('sendText').value.trim();
+                if (!text || !selectedChat) return;
+                $('sendBtn').disabled = true;
+                try {
+                    await api(
+                        'POST',
+                        `/api/chats/${encodeURIComponent(selectedChat)}/send`,
+                        { text },
+                    );
+                    $('sendText').value = '';
+                    await Promise.all([loadChat(), loadChats()]);
+                } catch (e) {
+                    alert(`Could not send: ${e.message}`);
+                } finally {
+                    $('sendBtn').disabled = false;
+                }
+            };
+            loaders.chats = () => Promise.all([loadChats(), loadChat()]);
+
+            // ---------- SOP & persona editors ----------
+            function editor(name, url, saveMsg) {
+                const load = async () => {
+                    const data = await api('GET', url);
+                    $(`${name}Text`).value = data.raw;
+                    if (data.hash)
+                        $(`${name}Hash`).textContent = `version ${data.hash}`;
+                    $(`${name}Msg`).replaceChildren();
+                };
+                $(`${name}Reload`).onclick = load;
+                $(`${name}Save`).onclick = async () => {
+                    try {
+                        const r = await api('PUT', url, {
+                            raw: $(`${name}Text`).value,
+                        });
+                        if (r.hash)
+                            $(`${name}Hash`).textContent = `version ${r.hash}`;
+                        flash(`${name}Msg`, 'ok', saveMsg(r));
+                        refreshStatus();
+                    } catch (e) {
+                        flash(`${name}Msg`, 'err', e.message);
+                    }
+                };
+                return load;
+            }
+            loaders.sop = editor(
+                'sop',
+                '/api/sop',
+                (r) => `Saved. SOP version ${r.hash} is now live.`,
+            );
+            loaders.persona = editor(
+                'persona',
+                '/api/persona',
+                (r) =>
+                    `Saved. Persona is live with ${r.examples} example conversations.`,
+            );
+
+            // ---------- settings ----------
+            const FIELDS = [
+                [
+                    'Model',
+                    [
+                        [
+                            'chatModel',
+                            'Chat model',
+                            'select',
+                            'Installed Ollama models',
+                        ],
+                        [
+                            'temperature',
+                            'Temperature',
+                            'range',
+                            'Lower = more consistent, higher = more varied',
+                            0,
+                            1.5,
+                            0.05,
+                        ],
+                    ],
+                ],
+                [
+                    'Human-like timing',
+                    [
+                        [
+                            'humanize',
+                            'Human-like delays',
+                            'checkbox',
+                            'Off = answer instantly (testing)',
+                        ],
+                        [
+                            'firstReplyMinSec',
+                            'First reply: min wait (s)',
+                            'number',
+                            'New or long-quiet chat',
+                            0,
+                            3600,
+                            1,
+                        ],
+                        [
+                            'firstReplyMaxSec',
+                            'First reply: max wait (s)',
+                            'number',
+                            '',
+                            0,
+                            3600,
+                            1,
+                        ],
+                        [
+                            'coldStartAfterMin',
+                            'Chat counts as new after (min)',
+                            'number',
+                            'Minutes without a reply',
+                            0,
+                            10080,
+                            1,
+                        ],
+                        [
+                            'typingCpsMin',
+                            'Typing speed min (chars/s)',
+                            'range',
+                            '6 chars/s ≈ 50 words/min',
+                            1,
+                            15,
+                            0.5,
+                        ],
+                        [
+                            'typingCpsMax',
+                            'Typing speed max (chars/s)',
+                            'range',
+                            '',
+                            1,
+                            15,
+                            0.5,
+                        ],
+                        [
+                            'typingPauseChance',
+                            'Mid-typing pause chance',
+                            'range',
+                            'Per ~4–9 s of typing',
+                            0,
+                            1,
+                            0.05,
+                        ],
+                        [
+                            'distractionChance',
+                            'Distraction chance',
+                            'range',
+                            '3–15 s delay before typing',
+                            0,
+                            1,
+                            0.05,
+                        ],
+                    ],
+                ],
+                [
+                    'Memory & knowledge',
+                    [
+                        [
+                            'historyMessages',
+                            'Recent messages in prompt',
+                            'number',
+                            '',
+                            2,
+                            200,
+                            1,
+                        ],
+                        [
+                            'ragTopK',
+                            'Knowledge chunks per reply',
+                            'number',
+                            '',
+                            0,
+                            30,
+                            1,
+                        ],
+                        [
+                            'ragMaxDistance',
+                            'Knowledge match strictness',
+                            'range',
+                            'Lower = only very relevant chunks',
+                            0.1,
+                            1.5,
+                            0.05,
+                        ],
+                        [
+                            'imageResendHours',
+                            'Don’t resend an image within (h)',
+                            'number',
+                            '',
+                            0,
+                            720,
+                            1,
+                        ],
+                    ],
+                ],
+                [
+                    'Groups',
+                    [
+                        [
+                            'replyInGroups',
+                            'Reply in groups when mentioned',
+                            'checkbox',
+                            '',
+                        ],
+                    ],
+                ],
+            ];
+            let savedSettings = null;
+
+            async function loadSettings() {
+                const { settings, models } = await api('GET', '/api/settings');
+                savedSettings = settings;
+                renderSettings(settings, models);
+                $('settingsMsg').replaceChildren();
+            }
+            function renderSettings(s, models) {
+                const form = $('settingsForm');
+                form.replaceChildren(
+                    ...FIELDS.map(([legend, fields]) =>
+                        el(
+                            'fieldset',
+                            {},
+                            el('legend', {}, legend),
+                            ...fields.map((f) => field(f, s, models)),
+                        ),
+                    ),
+                );
+            }
+            function field(
+                [key, label, type, hint, min, max, step],
+                s,
+                models,
+            ) {
+                let ctl;
+                if (type === 'select') {
+                    const options = [...new Set([s[key], ...models])];
+                    ctl = el(
+                        'select',
+                        { 'data-key': key },
+                        ...options.map((m) => {
+                            const o = el('option', { value: m }, m);
+                            o.selected = m === s[key];
+                            return o;
+                        }),
+                    );
+                } else if (type === 'checkbox') {
+                    ctl = el('input', { type: 'checkbox', 'data-key': key });
+                    ctl.checked = !!s[key];
+                } else if (type === 'range') {
+                    const out = el('span', { class: 'muted' }, String(s[key]));
+                    const input = el('input', {
+                        type: 'range',
+                        min,
+                        max,
+                        step,
+                        value: s[key],
+                        'data-key': key,
+                        'data-num': '1',
+                    });
+                    input.addEventListener(
+                        'input',
+                        () => (out.textContent = input.value),
+                    );
+                    ctl = el('span', { class: 'ctl' }, input, out);
+                } else {
+                    ctl = el('input', {
+                        type: 'number',
+                        min,
+                        max,
+                        step,
+                        value: s[key],
+                        'data-key': key,
+                        'data-num': '1',
+                    });
+                }
+                return el(
+                    'div',
+                    { class: 'field' },
+                    el('label', {}, label, hint ? el('small', {}, hint) : null),
+                    el('div', { class: 'ctl' }, ctl),
+                );
+            }
+            function collectSettings() {
+                const out = { ...savedSettings };
+                for (const input of $('settingsForm').querySelectorAll(
+                    '[data-key]',
+                )) {
+                    const k = input.dataset.key;
+                    out[k] =
+                        input.type === 'checkbox'
+                            ? input.checked
+                            : input.dataset.num
+                              ? Number(input.value)
+                              : input.value;
+                }
+                return out;
+            }
+            $('settingsSave').onclick = async () => {
+                try {
+                    const { settings } = await api(
+                        'PUT',
+                        '/api/settings',
+                        collectSettings(),
+                    );
+                    savedSettings = settings;
+                    flash(
+                        'settingsMsg',
+                        'ok',
+                        'Saved. New settings apply from the next reply.',
+                    );
+                } catch (e) {
+                    flash('settingsMsg', 'err', e.message);
+                }
+            };
+            $('settingsReset').onclick = loadSettings;
+            loaders.settings = loadSettings;
+
+            // ---------- knowledge ----------
+            let kbSelected = null;
+            async function loadKnowledge() {
+                const { documents, files } = await api('GET', '/api/knowledge');
+                const indexed = new Map(documents.map((d) => [d.path, d]));
+                $('kbInfo').textContent =
+                    `${documents.length} indexed · ${documents.reduce((n, d) => n + d.chunks, 0)} chunks`;
+                $('kbFiles').replaceChildren(
+                    ...(files.length
+                        ? files.map((f) =>
+                              el(
+                                  'div',
+                                  {
+                                      class:
+                                          f.path === kbSelected ? 'active' : '',
+                                      onclick: () => openKb(f.path),
+                                  },
+                                  f.path,
+                                  el(
+                                      'div',
+                                      {
+                                          class: 'muted',
+                                          style: 'font-size:12px',
+                                      },
+                                      indexed.has(f.path)
+                                          ? `${indexed.get(f.path).chunks} chunks · ${fmtTime(indexed.get(f.path).ingestedAt)}`
+                                          : 'not indexed yet',
+                                  ),
+                              ),
+                          )
+                        : [el('div', { class: 'muted' }, 'No files')]),
+                );
+            }
+            async function openKb(p) {
+                const { raw } = await api(
+                    'GET',
+                    `/api/knowledge/file?path=${encodeURIComponent(p)}`,
+                );
+                kbSelected = p;
+                $('kbPath').textContent = p;
+                $('kbPath').classList.remove('muted');
+                $('kbText').value = raw;
+                $('kbText').disabled =
+                    $('kbSave').disabled =
+                    $('kbDelete').disabled =
+                        false;
+                loadKnowledge();
+            }
+            $('kbNew').onclick = async () => {
+                const name = prompt('File name (e.g. opening-hours.md)');
+                if (!name) return;
+                try {
+                    await api(
+                        'PUT',
+                        `/api/knowledge/file?path=${encodeURIComponent(name)}`,
+                        { raw: `# ${name.replace(/\.\w+$/, '')}\n\n` },
+                    );
+                    await openKb(name);
+                } catch (e) {
+                    flash('kbMsg', 'err', e.message);
+                }
+            };
+            $('kbSave').onclick = async () => {
+                try {
+                    await api(
+                        'PUT',
+                        `/api/knowledge/file?path=${encodeURIComponent(kbSelected)}`,
+                        { raw: $('kbText').value },
+                    );
+                    flash(
+                        'kbMsg',
+                        'ok',
+                        'Saved. Press "Re-ingest knowledge" to make it searchable.',
+                    );
+                } catch (e) {
+                    flash('kbMsg', 'err', e.message);
+                }
+            };
+            $('kbDelete').onclick = async () => {
+                if (!kbSelected || !confirm(`Delete ${kbSelected}?`)) return;
+                await api(
+                    'DELETE',
+                    `/api/knowledge/file?path=${encodeURIComponent(kbSelected)}`,
+                );
+                kbSelected = null;
+                $('kbPath').textContent = 'No file selected';
+                $('kbText').value = '';
+                $('kbText').disabled =
+                    $('kbSave').disabled =
+                    $('kbDelete').disabled =
+                        true;
+                flash(
+                    'kbMsg',
+                    'warn',
+                    'Deleted. Re-ingest to remove it from the bot’s knowledge.',
+                );
+                loadKnowledge();
+            };
+            $('kbReingest').onclick = async () => {
+                $('kbReingest').disabled = true;
+                flash(
+                    'kbMsg',
+                    'warn',
+                    'Re-ingesting… (embedding changed files with Ollama)',
+                );
+                try {
+                    const r = await api('POST', '/api/knowledge/reingest');
+                    flash(
+                        'kbMsg',
+                        'ok',
+                        `Done: ${r.added.length} added, ${r.updated.length} updated, ${r.unchanged.length} unchanged, ${r.removed.length} removed.`,
+                    );
+                    loadKnowledge();
+                } catch (e) {
+                    flash('kbMsg', 'err', e.message);
+                } finally {
+                    $('kbReingest').disabled = false;
+                }
+            };
+            loaders.knowledge = loadKnowledge;
+
+            // ---------- images ----------
+            loaders.images = async () => {
+                const { images } = await api('GET', '/api/images');
+                $('imageGrid').replaceChildren(
+                    ...(images.length
+                        ? images.map((i) =>
+                              el(
+                                  'div',
+                                  { class: 'tile' },
+                                  el('img', {
+                                      src: `/api/images/${encodeURIComponent(i.id)}?token=${encodeURIComponent(token)}`,
+                                      alt: i.id,
+                                  }),
+                                  el('strong', {}, i.id),
+                                  el('div', {}, i.caption),
+                                  el(
+                                      'div',
+                                      { class: 'muted' },
+                                      `When: ${i.whenToUse}`,
+                                  ),
+                              ),
+                          )
+                        : [
+                              el(
+                                  'div',
+                                  { class: 'muted' },
+                                  'No images configured',
+                              ),
+                          ]),
+                );
+            };
+
+            // ---------- boot ----------
+            let timer = null;
+            async function start() {
+                if (!token) return showLogin();
+                try {
+                    await refreshStatus();
+                } catch (e) {
+                    if (e.message !== 'unauthorized')
+                        showLogin(`Cannot reach the bot: ${e.message}`);
+                    return;
+                }
+                $('login').hidden = true;
+                $('top').hidden = false;
+                $('app').hidden = false;
+                await loaders[currentTab]();
+                clearInterval(timer);
+                timer = setInterval(() => {
+                    if (document.hidden) return;
+                    refreshStatus().catch(() => {});
+                    if (currentTab === 'chats') loaders.chats().catch(() => {});
+                }, 5000);
+            }
+            start();
+        </script>
+    </body>
+</html>

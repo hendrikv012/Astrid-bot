@@ -44,6 +44,18 @@ Tip: while testing, set `ALLOWED_JIDS` to your own number so the bot answers nob
 
 The shipped content describes an example hair salon. Replace it with your own business.
 
+## Dashboard
+
+While the bot runs, a local dashboard is served at `http://127.0.0.1:3210`. The startup log prints a link that includes the access token (`Dashboard: http://127.0.0.1:3210/#token=…`).
+
+- **Chats**: every conversation with its messages, the facts the bot remembers and the running summary. You can pause or resume the bot per chat, forget a fact, or reply yourself (this pauses the bot in that chat).
+- **SOP** and **Persona**: edit `config/astrid.sop.yaml` and `config/persona.md`. Changes are validated before saving and apply from the next reply, with no restart.
+- **Settings**: model, temperature, human-like timing (first-reply wait, typing speed, pauses), memory and knowledge settings. Saved in the database and kept across restarts. They override `.env`.
+- **Knowledge**: edit, add or delete files in `knowledge/`, then re-ingest.
+- **Images** and **Status**: the configured images, connection state (including the QR code when linking), and today's numbers.
+
+The dashboard only listens on localhost. Every API call needs the token. Set `DASHBOARD_ENABLED=false` to turn it off.
+
 ## Owner commands
 
 Send these from `OWNER_JID` to the bot's number:

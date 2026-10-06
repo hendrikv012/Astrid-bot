@@ -76,6 +76,33 @@ export class Bot {
         });
     }
 
+    /** Swap in a new SOP (already validated). Applies from the next turn. */
+    updateSop(sop: LoadedSop): void {
+        this.d.sop = sop;
+    }
+
+    /** Swap in a new persona (already validated). Applies from the next turn. */
+    updatePersona(persona: Persona): void {
+        this.d.persona = persona;
+    }
+
+    get sop(): LoadedSop {
+        return this.d.sop;
+    }
+
+    get settings(): BotSettings {
+        return this.d.settings;
+    }
+
+    /**
+     * A human operator replies from the dashboard: send it as-is, store it,
+     * and pause the bot in that chat like a takeover from the phone.
+     */
+    async operatorSend(chatJid: string, text: string): Promise<void> {
+        await this.d.sender.sendRaw(chatJid, text);
+        this.humanTookOver(chatJid, text, null);
+    }
+
     /** Entry point for every normalized inbound message. */
     receive(msg: InboundMessage): void {
         const { settings, log } = this.d;
@@ -121,7 +148,7 @@ export class Bot {
     }
 
     /** A human replied from the business phone: store it and let them take over. */
-    humanTookOver(chatJid: string, text: string, waMsgId: string): void {
+    humanTookOver(chatJid: string, text: string, waMsgId: string | null): void {
         const mem = new ChatMemory(this.d.db, chatJid);
         mem.addMessage({ waMsgId, direction: 'out', text, sopHash: 'human' });
         const minutes = this.d.sop.sop.escalation.pause_bot_minutes;

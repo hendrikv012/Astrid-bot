@@ -1,9 +1,18 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { OllamaLlm } from './brain/llm.js';
 import { loadEnv } from './config/env.js';
 import { loadImages } from './config/images.js';
 import { loadPersona } from './config/persona.js';
+import {
+    loadRuntimeSettings,
+    saveRuntimeSettings,
+    settingsFromEnv,
+} from './config/runtime.js';
 import { loadSop } from './config/sop.js';
+import { applyRuntimeSettings } from './dashboard/admin.js';
+import { startDashboard } from './dashboard/server.js';
+import type { DB } from './memory/db.js';
 import { logger } from './logger.js';
 import { openDb } from './memory/db.js';
 import { Bot } from './pipeline/bot.js';
@@ -102,7 +111,9 @@ async function main(): Promise<void> {
         },
     });
 
-    const rawSender = createSender(conn.getSock, {
+    // Live-tunable settings: .env values with saved dashboard changes on top.
+    let runtime = loadRuntimeSettings(db, settingsFromEnv(env));
+    const senderOpts = {
         humanize: env.HUMANIZE,
         typing: {
             cpsMin: env.TYPING_CPS_MIN,
@@ -112,7 +123,8 @@ async function main(): Promise<void> {
             pauseChance: env.TYPING_PAUSE_CHANCE,
             distractionChance: env.DISTRACTION_CHANCE,
         },
-    });
+    };
+    const rawSender = createSender(conn.getSock, senderOpts);
     // Remember ids of bot-sent messages so they aren't mistaken for a human takeover.
     const sender: typeof rawSender = {
         ...rawSender,
@@ -152,7 +164,68 @@ async function main(): Promise<void> {
         },
     });
 
+    const botSettings = bot.settings;
+    applyRuntimeSettings(runtime, {
+        llm,
+        sender: senderOpts,
+        bot: botSettings,
+    });
+
+    const knowledgeSync = () =>
+        ingestKnowledge(db, llm, env.KNOWLEDGE_DIR, (m) =>
+            logger.info(`knowledge: ${m}`),
+        );
+
+    let dashboard: Awaited<ReturnType<typeof startDashboard>> | null = null;
+    if (env.DASHBOARD_ENABLED) {
+        const token = env.DASHBOARD_TOKEN ?? dashboardToken(db);
+        const liveBot = bot;
+        dashboard = await startDashboard({
+            db,
+            log: logger,
+            token,
+            host: env.DASHBOARD_HOST,
+            port: env.DASHBOARD_PORT,
+            bot: liveBot,
+            paths: {
+                sopFile: path.join(env.CONFIG_DIR, 'astrid.sop.yaml'),
+                personaFile: path.join(env.CONFIG_DIR, 'persona.md'),
+                knowledgeDir: env.KNOWLEDGE_DIR,
+                publicDir: 'dashboard',
+            },
+            images,
+            runtime: {
+                get: () => runtime,
+                set: (next) => {
+                    runtime = next;
+                    applyRuntimeSettings(next, {
+                        llm,
+                        sender: senderOpts,
+                        bot: botSettings,
+                    });
+                    saveRuntimeSettings(db, next);
+                },
+            },
+            connection: conn.state,
+            listModels: () => llm.listModels(),
+            reingest: knowledgeSync,
+        });
+        const addr = dashboard.address() as { port: number };
+        logger.info(
+            `Dashboard: http://${env.DASHBOARD_HOST === '0.0.0.0' ? 'localhost' : env.DASHBOARD_HOST}:${addr.port}/#token=${token}`,
+        );
+        if (
+            env.DASHBOARD_HOST !== '127.0.0.1' &&
+            env.DASHBOARD_HOST !== 'localhost'
+        ) {
+            logger.warn(
+                'Dashboard is reachable from other machines. It shows customer chats — keep the token secret.',
+            );
+        }
+    }
+
     const shutdown = async (signal: string) => {
+        dashboard?.close();
         logger.info({ signal }, 'shutting down');
         await conn.close();
         await Promise.race([
@@ -164,6 +237,19 @@ async function main(): Promise<void> {
     };
     process.on('SIGINT', () => void shutdown('SIGINT'));
     process.on('SIGTERM', () => void shutdown('SIGTERM'));
+}
+
+/** A random dashboard token, generated once and kept in the DB across restarts. */
+function dashboardToken(db: DB): string {
+    const row = db
+        .prepare(`SELECT value FROM meta WHERE key = 'dashboard_token'`)
+        .get() as { value: string } | undefined;
+    if (row) return row.value;
+    const token = crypto.randomBytes(24).toString('base64url');
+    db.prepare(
+        `INSERT INTO meta (key, value) VALUES ('dashboard_token', ?)`,
+    ).run(token);
+    return token;
 }
 
 main().catch((err) => {
