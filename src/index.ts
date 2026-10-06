@@ -52,6 +52,8 @@ async function main(): Promise<void> {
         temperature: env.LLM_TEMPERATURE,
         seed: env.LLM_SEED,
         numCtx: env.LLM_NUM_CTX,
+        maxTokens: env.LLM_MAX_TOKENS,
+        onChatProgress: (p) => logger.info(p, 'model still working'),
         onChatDone: ({ model, ms }) =>
             logger.info(
                 { model, seconds: Math.round(ms / 100) / 10 },

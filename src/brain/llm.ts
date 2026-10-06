@@ -25,6 +25,10 @@ export interface LlmClient {
 
 export class LlmOutputError extends Error {}
 
+const DEFAULT_MAX_TOKENS = 600;
+/** This many whitespace characters in a row means the model is stuck. */
+const STUCK_WHITESPACE = 200;
+
 export interface OllamaLlmOptions {
     host: string;
     chatModel: string;
@@ -32,6 +36,15 @@ export interface OllamaLlmOptions {
     temperature: number;
     seed: number;
     numCtx: number;
+    /** Upper limit on tokens per reply, so a stuck model can't write forever. */
+    maxTokens?: number;
+    /** Called every `progressEveryMs` while the model is still busy. */
+    onChatProgress?: (info: {
+        model: string;
+        chars: number;
+        seconds: number;
+    }) => void;
+    progressEveryMs?: number;
     /** Called after each chat call with how long the model took. */
     onChatDone?: (info: { model: string; ms: number }) => void;
     /** For tests: a stand-in for the Ollama client. */
@@ -96,10 +109,37 @@ export class OllamaLlm implements LlmClient {
                 temperature: this.opts.temperature,
                 seed: this.opts.seed,
                 num_ctx: this.opts.numCtx,
+                num_predict: this.opts.maxTokens ?? DEFAULT_MAX_TOKENS,
             },
         });
         let content = '';
-        for await (const part of stream) content += part.message.content;
+        // On slow machines, show that the model is still working ("chars: 0" = still reading the prompt).
+        const progress = setInterval(
+            () =>
+                this.opts.onChatProgress?.({
+                    model: name,
+                    chars: content.length,
+                    seconds: Math.round((Date.now() - started) / 1000),
+                }),
+            this.opts.progressEveryMs ?? 30_000,
+        );
+        try {
+            for await (const part of stream) {
+                content += part.message.content;
+                // Small models under a JSON grammar sometimes emit whitespace forever.
+                if (
+                    content.length >= STUCK_WHITESPACE &&
+                    !content.slice(-STUCK_WHITESPACE).trim()
+                ) {
+                    stream.abort();
+                    throw new LlmOutputError(
+                        'model got stuck writing whitespace',
+                    );
+                }
+            }
+        } finally {
+            clearInterval(progress);
+        }
         this.opts.onChatDone?.({ model: name, ms: Date.now() - started });
         return parseJsonOutput(content, schema);
     }

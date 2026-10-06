@@ -69,6 +69,8 @@ const EnvSchema = z
         LLM_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.4),
         LLM_SEED: z.coerce.number().int().default(42),
         LLM_NUM_CTX: z.coerce.number().int().positive().default(8192),
+        // Max tokens per model reply; stops a stuck model instead of waiting forever.
+        LLM_MAX_TOKENS: z.coerce.number().int().min(64).max(4096).default(600),
         // Model calls at the same time; set Ollama's OLLAMA_NUM_PARALLEL to the same value.
         LLM_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(2),
         // Background memory work waiting longer than this goes ahead of replies.
