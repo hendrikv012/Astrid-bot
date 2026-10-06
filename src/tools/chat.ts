@@ -78,8 +78,13 @@ async function main() {
         numCtx: env.LLM_NUM_CTX,
         maxTokens: env.LLM_MAX_TOKENS,
         progressEveryMs: 10_000,
-        onChatProgress: ({ chars, seconds }) => {
-            if (!chars)
+        onChatProgress: ({ chars, thinkingChars, seconds }) => {
+            if (thinkingChars && !chars)
+                log.info(
+                    { seconds, thinkingChars },
+                    'model is thinking before it answers',
+                );
+            else if (!chars)
                 log.info(
                     { seconds },
                     'model is still reading the prompt (nothing written yet)',

@@ -42,6 +42,8 @@ export interface OllamaLlmOptions {
     onChatProgress?: (info: {
         model: string;
         chars: number;
+        /** Hidden "reasoning" text, for models that think before answering. */
+        thinkingChars: number;
         seconds: number;
     }) => void;
     progressEveryMs?: number;
@@ -57,6 +59,8 @@ export class OllamaLlm implements LlmClient {
     private readonly client: Pick<Ollama, 'chat' | 'embed' | 'list' | 'show'>;
 
     private readonly opts: OllamaLlmOptions;
+    /** Per model: can it "think" (and should be told not to)? */
+    private readonly thinkers = new Map<string, Promise<boolean>>();
 
     constructor(opts: OllamaLlmOptions) {
         this.opts = { ...opts };
@@ -105,6 +109,8 @@ export class OllamaLlm implements LlmClient {
         const stream = await this.client.chat({
             model: name,
             messages,
+            // Reasoning models would otherwise think for minutes before writing a short reply.
+            ...((await this.canThink(name)) ? { think: false } : {}),
             format: z.toJSONSchema(schema),
             stream: true,
             options: {
@@ -115,12 +121,14 @@ export class OllamaLlm implements LlmClient {
             },
         });
         let content = '';
+        let thinking = 0;
         // On slow machines, show that the model is still working ("chars: 0" = still reading the prompt).
         const progress = setInterval(
             () =>
                 this.opts.onChatProgress?.({
                     model: name,
                     chars: content.length,
+                    thinkingChars: thinking,
                     seconds: Math.round((Date.now() - started) / 1000),
                 }),
             this.opts.progressEveryMs ?? 30_000,
@@ -128,6 +136,7 @@ export class OllamaLlm implements LlmClient {
         try {
             for await (const part of stream) {
                 content += part.message.content;
+                thinking += part.message.thinking?.length ?? 0;
                 this.opts.onChunk?.(part.message.content);
                 // Small models under a JSON grammar sometimes emit whitespace forever.
                 if (
@@ -145,6 +154,18 @@ export class OllamaLlm implements LlmClient {
         }
         this.opts.onChatDone?.({ model: name, ms: Date.now() - started });
         return parseJsonOutput(content, schema);
+    }
+
+    private canThink(model: string): Promise<boolean> {
+        let known = this.thinkers.get(model);
+        if (!known) {
+            known = Promise.resolve()
+                .then(() => this.client.show({ model }))
+                .then((r) => (r.capabilities ?? []).includes('thinking'))
+                .catch(() => false);
+            this.thinkers.set(model, known);
+        }
+        return known;
     }
 
     async embed(texts: string[]): Promise<number[][]> {

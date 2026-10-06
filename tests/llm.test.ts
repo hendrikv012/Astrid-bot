@@ -84,4 +84,28 @@ describe('OllamaLlm.chatJson', () => {
         await llm.chatJson([], z.object({ a: z.number() }));
         expect(progress.length).toBeGreaterThan(0);
     });
+
+    it('tells reasoning models not to think', async () => {
+        const calls: Record<string, unknown>[] = [];
+        const client = {
+            show: async () => ({ capabilities: ['completion', 'thinking'] }),
+            chat: async (req: Record<string, unknown>) => {
+                calls.push(req);
+                return (async function* () {
+                    yield { message: { content: '{"a":1}' } };
+                })();
+            },
+        } as unknown as Ollama;
+        const llm = new OllamaLlm({
+            host: 'http://x',
+            chatModel: 'm',
+            embedModel: 'e',
+            temperature: 0,
+            seed: 1,
+            numCtx: 2048,
+            client,
+        });
+        await llm.chatJson([], z.object({ a: z.number() }));
+        expect(calls[0]).toMatchObject({ think: false });
+    });
 });
