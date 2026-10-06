@@ -45,6 +45,26 @@ Tip: while testing, set `ALLOWED_JIDS` to your own number so the bot answers nob
 
 The shipped content describes an example hair salon. Replace it with your own business.
 
+## Running in the background (pm2)
+
+[pm2](https://pm2.keymetrics.io/) keeps the bot running as the process **`astrid`**: it restarts it after a crash (with backoff, so a missing Ollama doesn't cause a restart loop) and, once set up, after a reboot. Settings are in `ecosystem.config.cjs`.
+
+First link WhatsApp once in a normal terminal with `npm run dev` (scan the QR code, then stop it with Ctrl+C). After that:
+
+```sh
+npm install -g pm2       # once per machine
+npm run start:pm2        # build and start "astrid"
+pm2 startup              # once: prints a command, run it so pm2 starts on boot
+npm run pm2:save         # remember "astrid" for reboots
+
+npm run status           # is it running?
+npm run logs             # live log (dashboard link, errors)
+npm run restart:pm2      # rebuild and restart after code or .env changes
+npm run stop:pm2         # stop the bot
+```
+
+Only ever run one `astrid` process: two would fight over the same WhatsApp login.
+
 ## Dashboard
 
 While the bot runs, a local dashboard is served at `http://127.0.0.1:3210`. The startup log prints a link that includes the access token (`Dashboard: http://127.0.0.1:3210/#token=…`).

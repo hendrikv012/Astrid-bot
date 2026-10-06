@@ -18,6 +18,7 @@ npm test                           # vitest run
 npx vitest run tests/bot.test.ts   # one file
 npx vitest run -t "isolation"      # tests matching a name
 npm run ingest                     # sync knowledge/ into the DB (needs Ollama)
+npm run start:pm2                  # production: build + run as pm2 process "astrid" (ecosystem.config.cjs; pm2 installed globally)
 ```
 
 Tests need neither WhatsApp nor Ollama: they use an in-memory SQLite DB and fake `LlmClient` / `Sender` implementations (see `tests/bot.test.ts`). Relative imports must use the `.js` extension (NodeNext). Conventional commits (header ≤ 72 chars) are enforced by commitlint; husky runs lint-staged on commit.
