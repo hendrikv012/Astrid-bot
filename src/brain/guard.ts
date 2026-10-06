@@ -1,18 +1,11 @@
 import { matchesKeyword, type Sop } from '../config/sop.js';
-import type { BotReply } from './reply.js';
+import type { BotReply, PurchaseStage } from './reply.js';
 
 export type InboundVerdict =
-    | { kind: 'ok' }
-    | { kind: 'escalate'; triggerId: string; reason: string }
-    | { kind: 'forbidden'; topicId: string };
+    { kind: 'ok' } | { kind: 'forbidden'; topicId: string };
 
-/** Runs BEFORE the LLM: SOP escalation triggers and forbidden topics are code, not hope. */
+/** Runs BEFORE the LLM: forbidden topics are enforced in code, not hope. */
 export function checkInbound(text: string, sop: Sop): InboundVerdict {
-    for (const t of sop.escalation.triggers) {
-        if (matchesKeyword(text, t.keywords)) {
-            return { kind: 'escalate', triggerId: t.id, reason: t.reason };
-        }
-    }
     for (const t of sop.forbidden_topics) {
         if (matchesKeyword(text, t.keywords)) {
             return { kind: 'forbidden', topicId: t.id };
@@ -21,10 +14,35 @@ export function checkInbound(text: string, sop: Sop): InboundVerdict {
     return { kind: 'ok' };
 }
 
+/**
+ * Keyword backup for purchase signals, in case the model misses one.
+ * "Agreed" keywords only count when the chat already showed interest (this
+ * turn or recently), so a stray "deal" or "akkoord" never triggers an alert.
+ */
+export function detectPurchaseKeywords(
+    text: string,
+    sop: Sop,
+    hadRecentInterest: boolean,
+): PurchaseStage {
+    const { interest_keywords, agreed_keywords } = sop.sales;
+    const interested =
+        interest_keywords.length > 0 &&
+        !!matchesKeyword(text, interest_keywords);
+    if (
+        (interested || hadRecentInterest) &&
+        agreed_keywords.length > 0 &&
+        matchesKeyword(text, agreed_keywords)
+    ) {
+        return 'agreed';
+    }
+    return interested ? 'interested' : 'none';
+}
+
 export type Violation =
     | { kind: 'leak'; value: string }
     | { kind: 'drift'; match: string }
     | { kind: 'forbidden'; topicId: string }
+    | { kind: 'false_promise'; match: string }
     | { kind: 'image_dropped'; imageId: string; why: string }
     | { kind: 'trimmed'; detail: string };
 
@@ -52,6 +70,22 @@ const DRIFT_PATTERNS: RegExp[] = [
     /\bals (een )?(ai|taalmodel|kunstmatige intelligentie)\b/i,
     /\b(chatgpt|openai|qwen|llama|mistral|gemma|ollama|anthropic|claude)\b/i,
     /\b(system prompt|systeemprompt|my instructions|mijn instructies)\b/i,
+];
+
+/**
+ * Promises to check, find out or get back later. Nobody follows up on those
+ * (the owner is only alerted about purchases), so they are false promises.
+ * "A colleague will contact you" after a purchase is NOT matched: that one is
+ * backed by an owner alert.
+ */
+const FALSE_PROMISE_PATTERNS: RegExp[] = [
+    /\b(kom|komen) (er|daar|hier)( later| nog| zo| straks)? op terug\b/,
+    /\blaat (het |dat )?(je|jou|u) (zo |straks |later |nog |even )?weten\b/,
+    /\bik (ga |zal )?(het |dat |dit )?(even |eventjes |nog )?(checken|uitzoeken|navragen|nakijken|opzoeken)\b/,
+    /\bik (check|zoek|vraag) (het|dat|dit)\b/,
+    /\b(get|come) back to you\b/,
+    /\b(i'll|i will|let me) (check|find out|look into)\b/,
+    /\blet you know\b/,
 ];
 
 /** Runs AFTER the LLM: enforces SOP limits and isolation on the reply. */
@@ -84,7 +118,7 @@ export function checkReply(raw: BotReply, ctx: GuardContext): GuardResult {
         imageId = null;
     }
 
-    const joined = messages.join('\n').toLowerCase();
+    const joined = messages.join('\n').toLowerCase().replace(/[’‘]/g, "'");
     let blocked = false;
 
     for (const value of ctx.foreignIdentifiers) {
@@ -103,6 +137,13 @@ export function checkReply(raw: BotReply, ctx: GuardContext): GuardResult {
     for (const t of ctx.sop.forbidden_topics) {
         if (matchesKeyword(joined, t.keywords)) {
             violations.push({ kind: 'forbidden', topicId: t.id });
+            blocked = true;
+        }
+    }
+    for (const re of FALSE_PROMISE_PATTERNS) {
+        const m = re.exec(joined);
+        if (m) {
+            violations.push({ kind: 'false_promise', match: m[0] });
             blocked = true;
         }
     }

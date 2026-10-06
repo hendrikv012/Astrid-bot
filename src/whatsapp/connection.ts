@@ -110,7 +110,9 @@ export async function startConnection(
             if (connection === 'open') {
                 connState.status = 'open';
                 connState.qrText = null;
-                connState.user = s.user?.id ?? null;
+                connState.user = s.user?.id
+                    ? jidNormalizedUser(s.user.id)
+                    : null;
                 attempt = 0;
                 log.info({ user: s.user?.id }, 'WhatsApp connected');
             }
@@ -119,9 +121,12 @@ export async function startConnection(
                     lastDisconnect?.error as
                         { output?: { statusCode?: number } } | undefined
                 )?.output?.statusCode;
+                // An old QR can't be scanned any more; a new one follows on reconnect.
                 connState.status = 'reconnecting';
+                connState.qrText = null;
                 if (code === DisconnectReason.loggedOut) {
                     connState.status = 'logged_out';
+                    connState.user = null;
                     log.error(
                         `Logged out of WhatsApp. Delete ${opts.authDir} and restart to link again.`,
                     );

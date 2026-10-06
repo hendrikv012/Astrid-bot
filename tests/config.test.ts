@@ -34,12 +34,20 @@ describe('parseSop', () => {
 version: 1
 identity: { name: A, role: r, business: b, languages: [nl] }
 hard_rules: [{ id: R1, rule: x }]
-escalation: {}
-templates: { refusal: a, escalation: b, unknown: c }
+templates: { refusal: a, unknown: c }
 limits: { max_messages_per_reply: 2, max_chars_per_message: 100 }
 `;
-    it('accepts a minimal SOP', () => {
-        expect(parseSop(valid).sop.flows).toEqual([]);
+    it('accepts a minimal SOP with sales and takeover defaults', () => {
+        const { sop } = parseSop(valid);
+        expect(sop.flows).toEqual([]);
+        expect(sop.sales.notify_owner).toBe(true);
+        expect(sop.human_takeover.pause_bot_minutes).toBe(60);
+        expect(sop.templates.owner_agreed).toContain('{summary}');
+    });
+    it('explains that the old escalation section was replaced', () => {
+        expect(() => parseSop(`${valid}\nescalation: {}`)).toThrow(
+            /replaced.*sales.*human_takeover/,
+        );
     });
     it('rejects unknown keys, missing rules and duplicate ids', () => {
         expect(() => parseSop(`${valid}\nextra: 1`)).toThrow(
@@ -71,6 +79,17 @@ describe('matchesKeyword', () => {
             'ontevreden',
         );
         expect(matchesKeyword('humanity', ['human'])).toBeNull();
+    });
+});
+
+describe('parsePersona: speakers', () => {
+    it('accepts "Bot:" for replies and reports ignored speakers', () => {
+        const p = parsePersona(
+            'You are B.\n\n## Examples\n\nUser: hi\nBot: hey\n\nUser: yo\nAstrid: old name\n',
+            'Bella',
+        );
+        expect(p.examples).toEqual([{ user: 'hi', assistant: ['hey'] }]);
+        expect(p.ignoredSpeakers).toEqual(['Astrid']);
     });
 });
 

@@ -65,6 +65,7 @@ export const migrations: string[] = [
     );
     CREATE INDEX idx_images_sent_chat ON images_sent(chat_jid, image_id, sent_at);
 
+    -- Unused since migration 3 (owner alerts are purchase-only, see sales_events).
     CREATE TABLE escalations (
         id          INTEGER PRIMARY KEY,
         chat_jid    TEXT NOT NULL REFERENCES chats(jid),
@@ -93,5 +94,26 @@ export const migrations: string[] = [
     /* 2: extraction cursor + human-takeover pause per chat */ `
     ALTER TABLE chats ADD COLUMN extracted_upto INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE chats ADD COLUMN paused_until INTEGER NOT NULL DEFAULT 0;
+    `,
+    /* 3: reply address per chat, purchase alerts, indexes for dashboard stats */ `
+    -- The JID WhatsApp last used for this chat (may be a LID); used for replies
+    -- sent from the dashboard. chats.jid stays the stable memory key.
+    ALTER TABLE chats ADD COLUMN reply_jid TEXT;
+
+    -- One row per purchase signal the owner was alerted about.
+    CREATE TABLE sales_events (
+        id          INTEGER PRIMARY KEY,
+        chat_jid    TEXT NOT NULL REFERENCES chats(jid),
+        stage       TEXT NOT NULL CHECK (stage IN ('interested', 'agreed')),
+        summary     TEXT,
+        msg_id      INTEGER REFERENCES messages(id),
+        created_at  INTEGER NOT NULL
+    );
+    CREATE INDEX idx_sales_events_chat ON sales_events(chat_jid, stage, created_at);
+    CREATE INDEX idx_sales_events_created ON sales_events(created_at);
+
+    CREATE INDEX idx_messages_ts ON messages(ts);
+    CREATE INDEX idx_chats_last_seen ON chats(last_seen);
+    CREATE INDEX idx_chats_paused ON chats(paused_until);
     `,
 ];

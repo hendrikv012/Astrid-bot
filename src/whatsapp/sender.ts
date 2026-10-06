@@ -17,6 +17,11 @@ export interface SendPlan {
     replyJid: string;
     messages: string[];
     image: PreloadedImage | null;
+    /**
+     * Checked before each bubble and image. Returning false stops the rest of
+     * the reply, e.g. when a human took over the chat while the bot was typing.
+     */
+    shouldContinue?: () => boolean;
 }
 
 export interface SentMessage {
@@ -32,8 +37,8 @@ export interface Sender {
     think(elapsedMs: number): Promise<void>;
     /** Send bubbles (and optional image) with typing indicators and pacing. */
     send(plan: SendPlan): Promise<SentMessage[]>;
-    /** Plain immediate send without humanizing (owner notifications). */
-    sendRaw(jid: string, text: string): Promise<void>;
+    /** Plain immediate send without humanizing (owner alerts, operator replies). Returns the message id. */
+    sendRaw(jid: string, text: string): Promise<string | null>;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -82,8 +87,16 @@ export function createSender(
             await wait(Math.max(0, thinkDelayMs() - elapsedMs));
         },
 
-        async send({ replyJid, messages, image }) {
+        async send({ replyJid, messages, image, shouldContinue }) {
             const sent: SentMessage[] = [];
+            const keepGoing = () => !shouldContinue || shouldContinue();
+            const stop = async () => {
+                if (opts.humanize)
+                    await sock()
+                        .sendPresenceUpdate('paused', replyJid)
+                        .catch(() => {});
+                return sent;
+            };
             if (opts.humanize)
                 await sock()
                     .presenceSubscribe(replyJid)
@@ -95,7 +108,9 @@ export function createSender(
 
             for (let i = 0; i < messages.length; i++) {
                 const text = messages[i]!;
+                if (!keepGoing()) return stop();
                 await typeFor(replyJid, typingDurationMs(text.length, cps));
+                if (!keepGoing()) return stop();
                 const res = await sock().sendMessage(replyJid, { text });
                 sent.push({
                     waMsgId: res?.key.id ?? null,
@@ -107,7 +122,9 @@ export function createSender(
             }
 
             if (image) {
+                if (!keepGoing()) return stop();
                 await typeFor(replyJid, imagePickDelayMs());
+                if (!keepGoing()) return stop();
                 const res = await sock().sendMessage(replyJid, {
                     image: image.data,
                     mimetype: image.mimetype,
@@ -124,7 +141,8 @@ export function createSender(
         },
 
         async sendRaw(jid, text) {
-            await sock().sendMessage(jid, { text });
+            const res = await sock().sendMessage(jid, { text });
+            return res?.key.id ?? null;
         },
     };
 }

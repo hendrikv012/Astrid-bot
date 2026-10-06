@@ -39,23 +39,38 @@ export const SopSchema = z
                     .strict(),
             )
             .default([]),
-        escalation: z
+        sales: z
             .object({
+                /** Send the owner a WhatsApp alert for purchase signals. */
                 notify_owner: z.boolean().default(true),
-                pause_bot_minutes: z.number().int().nonnegative().default(0),
-                triggers: z
-                    .array(
-                        z
-                            .object({
-                                id,
-                                reason: z.string().min(1),
-                                keywords,
-                            })
-                            .strict(),
-                    )
-                    .default([]),
+                /** Code-level backup: these mark a customer as wanting to buy. */
+                interest_keywords: z.array(z.string().min(1)).default([]),
+                /**
+                 * Code-level backup for "agreed to buy". Only counts when the
+                 * chat already showed purchase interest, so a stray "deal" or
+                 * "akkoord" elsewhere never triggers an alert.
+                 */
+                agreed_keywords: z.array(z.string().min(1)).default([]),
+                /** Don't alert again for the same stage in a chat within this window. */
+                renotify_after_hours: z.number().min(0).max(720).default(24),
             })
-            .strict(),
+            .strict()
+            .default({
+                notify_owner: true,
+                interest_keywords: [],
+                agreed_keywords: [],
+                renotify_after_hours: 24,
+            }),
+        human_takeover: z
+            .object({
+                /**
+                 * When a person replies (phone or dashboard), the bot stays
+                 * silent in that chat for this long. 0 turns takeover off.
+                 */
+                pause_bot_minutes: z.number().int().nonnegative().default(60),
+            })
+            .strict()
+            .default({ pause_bot_minutes: 60 }),
         flows: z
             .array(
                 z
@@ -71,8 +86,20 @@ export const SopSchema = z
         templates: z
             .object({
                 refusal: z.string().min(1),
-                escalation: z.string().min(1),
                 unknown: z.string().min(1),
+                /** Owner alerts. Placeholders: {customer} {number} {summary} {message} */
+                owner_interested: z
+                    .string()
+                    .min(1)
+                    .default(
+                        '🛒 Wants to buy: {customer}\nWhat: {summary}\nLast message: "{message}"',
+                    ),
+                owner_agreed: z
+                    .string()
+                    .min(1)
+                    .default(
+                        '✅ Agreed to buy: {customer}\nWhat: {summary}\nLast message: "{message}"',
+                    ),
             })
             .strict(),
         limits: z
@@ -88,7 +115,6 @@ export const SopSchema = z
         const all = [
             ...sop.hard_rules.map((r) => r.id),
             ...sop.forbidden_topics.map((t) => t.id),
-            ...sop.escalation.triggers.map((t) => t.id),
             ...sop.flows.map((f) => f.id),
         ];
         for (const i of all) {
@@ -117,6 +143,11 @@ export function parseSop(raw: string, source = 'SOP'): LoadedSop {
         data = YAML.parse(raw);
     } catch (err) {
         throw new Error(`${source}: invalid YAML: ${(err as Error).message}`);
+    }
+    if (data && typeof data === 'object' && 'escalation' in data) {
+        throw new Error(
+            `${source}: the "escalation" section was replaced. Use "sales" (owner alerts when a customer wants to buy or agrees to buy) and "human_takeover" (pause_bot_minutes), and remove templates.escalation.`,
+        );
     }
     const parsed = SopSchema.safeParse(data);
     if (!parsed.success) {

@@ -8,6 +8,7 @@ import { loadImages } from '../src/config/images.js';
 import type { Persona } from '../src/config/persona.js';
 import {
     loadRuntimeSettings,
+    RuntimeStore,
     saveRuntimeSettings,
     type RuntimeSettings,
 } from '../src/config/runtime.js';
@@ -46,7 +47,8 @@ let dir: string;
 let db: DB;
 let server: http.Server;
 let base: string;
-let runtime: RuntimeSettings;
+let runtime: RuntimeStore;
+let reingestCalls = 0;
 const bot = {
     sop: null as unknown as LoadedSop,
     persona: null as Persona | null,
@@ -106,8 +108,7 @@ beforeEach(async () => {
     db = openDb({ path: ':memory:', embedDim: 4 });
     bot.sop = loadSop(path.join(dir, 'config/astrid.sop.yaml'));
     bot.sent = [];
-    runtime = { ...baseSettings };
-    llmCalls.length = 0;
+    reingestCalls = 0;
 
     const a = new ChatMemory(db, A);
     a.ensureChat({ name: 'Marieke' });
@@ -115,6 +116,16 @@ beforeEach(async () => {
     a.addMessage({ direction: 'out', text: 'Hoi! Hoe kan ik helpen?' });
     a.upsertFact({ key: 'name', value: 'Marieke' });
     new ChatMemory(db, B).addMessage({ direction: 'in', text: 'hallo' });
+
+    runtime = new RuntimeStore(db, baseSettings);
+    runtime.attach((s) =>
+        applyRuntimeSettings(s, {
+            llm: { setOptions: (o) => llmCalls.push(o) },
+            sender: senderOpts,
+            bot: botSettings,
+        }),
+    );
+    llmCalls.length = 0;
 
     server = await startDashboard({
         db,
@@ -133,33 +144,23 @@ beforeEach(async () => {
             path.join(dir, 'config/images.yaml'),
             path.join(root, 'assets/images'),
         ),
-        runtime: {
-            get: () => runtime,
-            set: (s) => {
-                runtime = s;
-                applyRuntimeSettings(s, {
-                    llm: { setOptions: (o) => llmCalls.push(o) },
-                    sender: senderOpts,
-                    bot: botSettings,
-                });
-            },
-        },
+        runtime,
         connection: () => ({
             status: 'open',
             qrText: null,
             user: '31600000099@s.whatsapp.net',
         }),
-        listModels: async () => [
-            'qwen2.5:14b-instruct',
-            'llama3.1:8b',
-            'nomic-embed-text:latest',
-        ],
-        reingest: async () => ({
-            added: [],
-            updated: ['hours.md'],
-            unchanged: [],
-            removed: [],
-        }),
+        listChatModels: async () => ['qwen2.5:14b-instruct', 'llama3.1:8b'],
+        reingest: async () => {
+            reingestCalls++;
+            await new Promise((r) => setTimeout(r, 30));
+            return {
+                added: [],
+                updated: ['hours.md'],
+                unchanged: [],
+                removed: [],
+            };
+        },
     });
     base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
@@ -263,6 +264,25 @@ describe('chats', () => {
         expect(bot.sent).toEqual([{ jid: A, text: 'Ik help je verder!' }]);
     });
 
+    it('keeps /api/status light and serves stats separately', async () => {
+        const status = await json(call('GET', '/api/status'));
+        expect(status.connection.status).toBe('open');
+        expect(status.stats).toBeUndefined();
+        const { stats } = await json(call('GET', '/api/stats'));
+        expect(stats.chats).toBe(2);
+        expect(stats).toHaveProperty('agreedToday', 0);
+    });
+
+    it('clamps the message limit', async () => {
+        const jid = encodeURIComponent(A);
+        for (const limit of ['-1', '1.5', 'abc', '0']) {
+            const r = await call('GET', `/api/chats/${jid}?limit=${limit}`);
+            expect(r.status).toBe(200);
+        }
+        const one = await json(call('GET', `/api/chats/${jid}?limit=-1`));
+        expect(one.messages).toHaveLength(1);
+    });
+
     it('404s unknown chats', async () => {
         expect(
             (await call('GET', '/api/chats/nobody%40s.whatsapp.net')).status,
@@ -294,6 +314,25 @@ describe('SOP and persona editing', () => {
         expect(fs.readFileSync(file, 'utf8')).toBe(raw);
     });
 
+    it('refuses a rename that would drop the persona examples', async () => {
+        const file = path.join(dir, 'config/astrid.sop.yaml');
+        const before = fs.readFileSync(file, 'utf8');
+        const r = await call('PUT', '/api/sop', {
+            raw: before.replace('name: Astrid', 'name: Bella'),
+        });
+        expect(r.status).toBe(422);
+        expect((await json(r)).error).toMatch(/"Astrid:".*"Bella:" or "Bot:"/);
+        expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    });
+
+    it('refuses persona example lines that would be ignored', async () => {
+        const r = await call('PUT', '/api/persona', {
+            raw: 'You are Astrid.\n\n## Examples\n\nUser: hi\nBella: hoi!\n',
+        });
+        expect(r.status).toBe(422);
+        expect((await json(r)).error).toMatch(/"Bella:"/);
+    });
+
     it('saves the persona', async () => {
         const r = await call('PUT', '/api/persona', {
             raw: 'You are Astrid.\n\n## Examples\n\nUser: hi\nAstrid: hoi!\n',
@@ -311,19 +350,21 @@ describe('settings', () => {
         expect(got.models).toContain('llama3.1:8b');
 
         const bad = await call('PUT', '/api/settings', {
-            ...runtime,
+            ...runtime.get(),
             typingCpsMin: 9,
             typingCpsMax: 5,
         });
         expect(bad.status).toBe(422);
-        const missing = await call('PUT', '/api/settings', {
-            ...runtime,
-            chatModel: 'not-pulled',
-        });
-        expect(missing.status).toBe(422);
+        for (const chatModel of ['not-pulled', 'nomic-embed-text']) {
+            const r = await call('PUT', '/api/settings', {
+                ...runtime.get(),
+                chatModel,
+            });
+            expect(r.status).toBe(422);
+        }
 
         const ok = await call('PUT', '/api/settings', {
-            ...runtime,
+            ...runtime.get(),
             temperature: 0.8,
             humanize: false,
             chatModel: 'llama3.1:8b',
@@ -338,9 +379,52 @@ describe('settings', () => {
         expect(botSettings.firstReply.maxMs).toBe(0); // humanize off disables the first-reply wait
     });
 
-    it('persists settings over .env defaults', () => {
-        saveRuntimeSettings(db, { ...baseSettings, temperature: 1.1 });
-        expect(loadRuntimeSettings(db, baseSettings).temperature).toBe(1.1);
+    it('stores only overrides and can reset to .env', async () => {
+        await call('PUT', '/api/settings', {
+            ...runtime.get(),
+            temperature: 1.1,
+        });
+        const got = await json(call('GET', '/api/settings'));
+        expect(got.overrides).toEqual(['temperature']);
+        expect(got.defaults.temperature).toBe(0.4);
+
+        // A later .env change to another key still applies on restart.
+        const newEnv = { ...baseSettings, historyMessages: 50 };
+        const reloaded = loadRuntimeSettings(db, newEnv);
+        expect(reloaded.temperature).toBe(1.1);
+        expect(reloaded.historyMessages).toBe(50);
+
+        const reset = await call('DELETE', '/api/settings');
+        expect((await json(reset)).overrides).toEqual([]);
+        expect(runtime.get().temperature).toBe(0.4);
+    });
+
+    it('keeps valid saved keys when one saved key is invalid or unknown', () => {
+        const warnings: string[] = [];
+        db.prepare(
+            `INSERT INTO meta (key, value) VALUES ('runtime_settings', ?)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+        ).run(
+            JSON.stringify({
+                temperature: 1.2,
+                ragTopK: 999,
+                removedSetting: true,
+                typingCpsMin: 20, // > typingCpsMax (7) in .env
+            }),
+        );
+        const s = loadRuntimeSettings(db, baseSettings, (m) =>
+            warnings.push(m),
+        );
+        expect(s.temperature).toBe(1.2);
+        expect(s.ragTopK).toBe(baseSettings.ragTopK);
+        expect(s.typingCpsMin).toBe(baseSettings.typingCpsMin);
+        expect(warnings.join('\n')).toMatch(/ragTopK/);
+        expect(warnings.join('\n')).toMatch(/removedSetting/);
+        expect(warnings.join('\n')).toMatch(/typingCpsMin/);
+    });
+
+    it('saves nothing when settings equal .env', () => {
+        expect(saveRuntimeSettings(db, baseSettings, baseSettings)).toEqual([]);
     });
 });
 
@@ -361,10 +445,13 @@ describe('knowledge', () => {
         )) as { raw: string };
         expect(f.raw).toContain('€45');
 
-        const r = (await json(call('POST', '/api/knowledge/reingest'))) as {
-            updated: string[];
-        };
-        expect(r.updated).toEqual(['hours.md']);
+        const [r1, r2] = await Promise.all([
+            json(call('POST', '/api/knowledge/reingest')),
+            json(call('POST', '/api/knowledge/reingest')),
+        ]);
+        expect(r1.updated).toEqual(['hours.md']);
+        expect(r2.updated).toEqual(['hours.md']);
+        expect(reingestCalls).toBe(1); // second click joined the running ingest
     });
 });
 

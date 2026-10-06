@@ -7,8 +7,10 @@ import type { ImageLibrary } from '../config/images.js';
 import { parsePersona } from '../config/persona.js';
 import {
     RuntimeSettingsSchema,
+    type RuntimeKey,
     type RuntimeSettings,
 } from '../config/runtime.js';
+import { sameModel } from '../brain/llm.js';
 import { parseSop, type LoadedSop } from '../config/sop.js';
 import type { Persona } from '../config/persona.js';
 import type { Logger } from '../logger.js';
@@ -41,9 +43,15 @@ export interface DashboardDeps {
         get(): RuntimeSettings;
         /** Validated settings: apply to live objects and persist. */
         set(s: RuntimeSettings): void;
+        /** Drop dashboard overrides, back to .env values. */
+        reset(): void;
+        /** Keys currently overriding .env. */
+        overrides(): RuntimeKey[];
+        readonly defaults: RuntimeSettings;
     };
     connection: () => ConnectionState;
-    listModels: () => Promise<string[]>;
+    /** Installed Ollama models that can chat (embedding models excluded). */
+    listChatModels: () => Promise<string[]>;
     reingest: () => Promise<IngestResult>;
 }
 
@@ -183,12 +191,14 @@ function buildRoutes(d: DashboardDeps): Route[] {
         return new ChatMemory(d.db, jid);
     };
 
+    // Polled every few seconds by every tab, so it must stay cheap: no DB scans.
     on('GET', '/api/status', () => ({
         connection: d.connection(),
-        stats: getStats(d.db),
         sopHash: d.bot.sop.hash,
         botName: d.bot.sop.sop.identity.name,
     }));
+
+    on('GET', '/api/stats', () => ({ stats: getStats(d.db) }));
 
     // --- chats ---
     on('GET', '/api/chats', ({ url }) => ({
@@ -197,10 +207,13 @@ function buildRoutes(d: DashboardDeps): Route[] {
 
     on('GET', '/api/chats/([^/]+)', ({ params, url }) => {
         const mem = chatOr404(params[0]!);
-        const limit = Math.min(
-            Number(url.searchParams.get('limit')) || 200,
-            1000,
+        const requested = Number.parseInt(
+            url.searchParams.get('limit') ?? '',
+            10,
         );
+        const limit = Number.isFinite(requested)
+            ? Math.min(Math.max(requested, 1), 1000)
+            : 200;
         return {
             jid: mem.chatJid,
             messages: mem.recentMessages(limit),
@@ -267,15 +280,23 @@ function buildRoutes(d: DashboardDeps): Route[] {
         } catch (err) {
             throw new HttpError(422, (err as Error).message);
         }
+        // The persona's example lines are keyed by the bot name, which lives in
+        // the SOP. Renaming must not silently drop every few-shot example.
+        const oldName = d.bot.sop.sop.identity.name;
+        const newName = loaded.sop.identity.name;
+        const persona = parsePersona(
+            fs.readFileSync(d.paths.personaFile, 'utf8'),
+            newName,
+        );
+        if (newName !== oldName && persona.ignoredSpeakers.length) {
+            throw new HttpError(
+                422,
+                `Renaming the bot to "${newName}" would make the persona ignore its example replies (they start with ${persona.ignoredSpeakers.map((n) => `"${n}:"`).join(', ')}). In the Persona tab, change those lines to "${newName}:" or "Bot:" first, then save the SOP again.`,
+            );
+        }
         writeAtomic(d.paths.sopFile, raw);
         d.bot.updateSop(loaded);
-        // The persona's example lines are keyed by the bot name, which lives in the SOP.
-        d.bot.updatePersona(
-            parsePersona(
-                fs.readFileSync(d.paths.personaFile, 'utf8'),
-                loaded.sop.identity.name,
-            ),
-        );
+        d.bot.updatePersona(persona);
         d.log.info({ sopHash: loaded.hash }, 'SOP updated from dashboard');
         return { hash: loaded.hash };
     });
@@ -288,11 +309,18 @@ function buildRoutes(d: DashboardDeps): Route[] {
         const { raw } = z
             .object({ raw: z.string().max(MAX_BODY) })
             .parse(await body());
+        const botName = d.bot.sop.sop.identity.name;
         let persona: Persona;
         try {
-            persona = parsePersona(raw, d.bot.sop.sop.identity.name);
+            persona = parsePersona(raw, botName);
         } catch (err) {
             throw new HttpError(422, (err as Error).message);
+        }
+        if (persona.ignoredSpeakers.length) {
+            throw new HttpError(
+                422,
+                `Example lines starting with ${persona.ignoredSpeakers.map((n) => `"${n}:"`).join(', ')} would be ignored. Use "User:" for the customer and "${botName}:" or "Bot:" for replies.`,
+            );
         }
         writeAtomic(d.paths.personaFile, raw);
         d.bot.updatePersona(persona);
@@ -306,33 +334,35 @@ function buildRoutes(d: DashboardDeps): Route[] {
     // --- runtime settings ---
     on('GET', '/api/settings', async () => ({
         settings: d.runtime.get(),
-        models: await d.listModels().catch(() => []),
+        defaults: d.runtime.defaults,
+        overrides: d.runtime.overrides(),
+        models: await d.listChatModels().catch(() => []),
     }));
 
     on('PUT', '/api/settings', async ({ body }) => {
         const parsed = RuntimeSettingsSchema.safeParse(await body());
         if (!parsed.success)
             throw new HttpError(422, z.prettifyError(parsed.error));
-        const models = await d.listModels().catch(() => null);
-        if (
-            models &&
-            !models.some(
-                (m) =>
-                    m === parsed.data.chatModel ||
-                    m === `${parsed.data.chatModel}:latest`,
-            )
-        ) {
+        const { chatModel } = parsed.data;
+        const models = await d.listChatModels().catch(() => null);
+        if (models && !models.some((m) => sameModel(m, chatModel))) {
             throw new HttpError(
                 422,
-                `Model "${parsed.data.chatModel}" is not installed in Ollama. Run: ollama pull ${parsed.data.chatModel}`,
+                `"${chatModel}" is not an installed chat model. Embedding models can't chat; to install a chat model run: ollama pull ${chatModel}`,
             );
         }
         d.runtime.set(parsed.data);
         d.log.info(
-            { settings: parsed.data },
+            { overrides: d.runtime.overrides() },
             'settings updated from dashboard',
         );
-        return { settings: parsed.data };
+        return { settings: parsed.data, overrides: d.runtime.overrides() };
+    });
+
+    on('DELETE', '/api/settings', () => {
+        d.runtime.reset();
+        d.log.info('dashboard settings reset to .env');
+        return { settings: d.runtime.get(), overrides: [] };
     });
 
     // --- knowledge ---
@@ -372,9 +402,15 @@ function buildRoutes(d: DashboardDeps): Route[] {
         return { ok: true };
     });
 
+    // One ingest at a time: a second click joins the running one instead of
+    // embedding everything twice and colliding on kb_documents.path.
+    let ingesting: Promise<IngestResult> | null = null;
     on('POST', '/api/knowledge/reingest', async () => {
         try {
-            return await d.reingest();
+            ingesting ??= d.reingest().finally(() => {
+                ingesting = null;
+            });
+            return await ingesting;
         } catch (err) {
             throw new HttpError(
                 502,

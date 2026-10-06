@@ -64,8 +64,8 @@ class FakeLlm implements LlmClient {
         return {
             messages: ['Oké!'],
             image_id: null,
-            escalate: false,
-            escalate_reason: null,
+            purchase: 'none',
+            purchase_summary: null,
             flow_done: false,
             ...fn(messages, chat),
         } as T;
@@ -78,20 +78,28 @@ class FakeLlm implements LlmClient {
 
 class FakeSender implements Sender {
     sent: SendPlan[] = [];
+    /** Bubbles actually delivered (after shouldContinue checks). */
+    delivered: string[] = [];
     raw: { jid: string; text: string }[] = [];
     reads = 0;
+    /** Runs before each bubble, e.g. to simulate a human taking over mid-reply. */
+    beforeBubble: (i: number) => void = () => {};
     async markRead() {
         this.reads++;
     }
     async think() {}
     async send(plan: SendPlan) {
         this.sent.push(plan);
+        const out: { waMsgId: null; text: string; imageId: string | null }[] =
+            [];
+        for (const [i, text] of plan.messages.entries()) {
+            this.beforeBubble(i);
+            if (plan.shouldContinue && !plan.shouldContinue()) return out;
+            this.delivered.push(text);
+            out.push({ waMsgId: null, text, imageId: null });
+        }
         return [
-            ...plan.messages.map((text) => ({
-                waMsgId: null,
-                text,
-                imageId: null,
-            })),
+            ...out,
             ...(plan.image
                 ? [
                       {
@@ -105,6 +113,7 @@ class FakeSender implements Sender {
     }
     async sendRaw(jid: string, text: string) {
         this.raw.push({ jid, text });
+        return null;
     }
 }
 
@@ -281,16 +290,102 @@ describe('Bot pipeline', () => {
         ]);
     });
 
-    it('escalates in code, notifies the owner and pauses the bot', async () => {
-        await say(A, 'Ik wil mijn geld terug');
-        expect(llm.prompts).toHaveLength(0);
-        expect(sender.sent.at(-1)!.messages).toEqual([
-            sop.sop.templates.escalation,
-        ]);
+    it('alerts the owner when a customer wants to buy, once per window', async () => {
+        llm.replies.push(() => ({
+            messages: ['Leuk! Welke dag wil je komen?'],
+            purchase: 'interested',
+            purchase_summary: 'Knippen dames, zaterdag',
+        }));
+        await say(A, 'Ik wil graag een knipbeurt', 'Marieke');
+        expect(sender.raw).toHaveLength(1);
         expect(sender.raw[0]!.jid).toBe(OWNER);
+        expect(sender.raw[0]!.text).toContain('Marieke');
+        expect(sender.raw[0]!.text).toContain('Knippen dames, zaterdag');
+        expect(sender.raw[0]!.text).toContain('31600000001');
 
+        // Still interested in the next turn: no second alert.
+        llm.replies.push(() => ({
+            messages: ['Hoe laat?'],
+            purchase: 'interested',
+            purchase_summary: 'Knippen dames, zaterdag',
+        }));
+        await say(A, 'zaterdag', 'Marieke');
+        expect(sender.raw).toHaveLength(1);
+
+        // Agreeing is a new stage: alerted, and the bot keeps chatting.
+        llm.replies.push(() => ({
+            messages: ['Top, een collega neemt contact met je op!'],
+            purchase: 'agreed',
+            purchase_summary: 'Knippen dames, zaterdag 14:00, Marieke',
+        }));
+        await say(A, 'ja klopt, 14:00', 'Marieke');
+        expect(sender.raw).toHaveLength(2);
+        expect(sender.raw[1]!.text).toContain('14:00');
+        expect(new ChatMemory(db, A).getPausedUntil()).toBe(0);
+
+        llm.replies.push(() => ({ messages: ['Graag gedaan!'] }));
+        await say(A, 'dankjewel', 'Marieke');
+        expect(sender.sent.at(-1)!.messages).toEqual(['Graag gedaan!']);
+    });
+
+    it('uses SOP keywords as a backup when the model misses a purchase', async () => {
+        await say(A, 'Ik wil graag bestellen');
+        expect(sender.raw).toHaveLength(1);
+
+        // "akkoord" only counts as agreeing after interest was shown.
+        await say(A, 'akkoord');
+        expect(sender.raw).toHaveLength(2);
+        expect(sender.raw[1]!.text).toMatch(/akkoord|agreed/i);
+
+        await say(B, 'akkoord');
+        expect(sender.raw).toHaveLength(2); // no prior interest in chat B
+    });
+
+    it('does not alert the owner about complaints or requests for a human', async () => {
+        await say(A, 'Ik wil een klacht indienen en mijn geld terug');
+        await say(A, 'Ik wil een echt persoon spreken');
+        expect(sender.raw).toHaveLength(0);
+        expect(llm.prompts).toHaveLength(2); // the bot answers itself
+        expect(new ChatMemory(db, A).getPausedUntil()).toBe(0);
+    });
+
+    it('rewrites replies that promise to check or get back later', async () => {
+        llm.replies.push(
+            () => ({
+                messages: ['Goeie vraag, ik check het even en kom erop terug!'],
+            }),
+            () => ({ messages: ['Dat weet ik helaas niet zeker.'] }),
+        );
+        await say(A, 'Verkopen jullie cadeaubonnen?');
+        expect(sender.sent.at(-1)!.messages).toEqual([
+            'Dat weet ik helaas niet zeker.',
+        ]);
+        const retry = llm.prompts.at(-1)!.messages.at(-1)!;
+        expect(retry.content).toMatch(/promised to check/);
+    });
+
+    it('stops mid-reply when a human takes over while the bot is typing', async () => {
+        llm.replies.push(() => ({ messages: ['Een', 'Twee', 'Drie'] }));
+        sender.beforeBubble = (i) => {
+            if (i === 1) bot.humanTookOver(A, 'Ik neem het over', null);
+        };
+        await say(A, 'hoi');
+        expect(sender.delivered).toEqual(['Een']);
+        const texts = new ChatMemory(db, A)
+            .recentMessages(10)
+            .map((m) => m.text);
+        expect(texts).not.toContain('Twee');
+        expect(texts).toContain('Ik neem het over');
+    });
+
+    it('owner commands pause and resume the bot', async () => {
+        bot.receive({
+            ...inbound(OWNER, '!pause 31600000001'),
+            text: '!pause 31600000001',
+        });
+        await new Promise((r) => setTimeout(r, 20));
         await say(A, 'hallo??');
-        expect(sender.sent).toHaveLength(1); // paused: no reply
+        expect(sender.sent).toHaveLength(0);
 
         bot.receive({
             ...inbound(OWNER, '!resume 31600000001'),
@@ -298,7 +393,22 @@ describe('Bot pipeline', () => {
         });
         await new Promise((r) => setTimeout(r, 20));
         await say(A, 'hallo?');
-        expect(sender.sent).toHaveLength(2);
+        expect(sender.sent).toHaveLength(1);
+    });
+
+    it('sends dashboard replies to the WhatsApp address of the chat and pauses', async () => {
+        const lid = '123456789@lid';
+        currentChat = A;
+        bot.receive({ ...inbound(A, 'hoi'), replyJid: lid });
+        await bot.idle();
+        await bot.operatorSend(A, 'Hoi, met Sanne van de salon');
+        expect(sender.raw.at(-1)).toEqual({
+            jid: lid,
+            text: 'Hoi, met Sanne van de salon',
+        });
+        expect(new ChatMemory(db, A).getPausedUntil()).toBeGreaterThan(
+            Date.now(),
+        );
     });
 
     it('refuses forbidden topics without calling the model', async () => {

@@ -74,22 +74,39 @@ export class ChatMemory {
         if (!chatJid) throw new Error('ChatMemory requires a chat JID');
     }
 
-    ensureChat(opts: { name?: string | null; isGroup?: boolean } = {}): void {
+    ensureChat(
+        opts: {
+            name?: string | null;
+            isGroup?: boolean;
+            /** The JID WhatsApp used for this chat; replies are sent there. */
+            replyJid?: string | null;
+        } = {},
+    ): void {
         const now = Date.now();
         this.db
             .prepare(
-                `INSERT INTO chats (jid, name, is_group, first_seen, last_seen)
-                 VALUES (@jid, @name, @isGroup, @now, @now)
+                `INSERT INTO chats (jid, name, is_group, first_seen, last_seen, reply_jid)
+                 VALUES (@jid, @name, @isGroup, @now, @now, @replyJid)
                  ON CONFLICT (jid) DO UPDATE SET
                     last_seen = @now,
-                    name = COALESCE(@name, chats.name)`,
+                    name = COALESCE(@name, chats.name),
+                    reply_jid = COALESCE(@replyJid, chats.reply_jid)`,
             )
             .run({
                 jid: this.chatJid,
                 name: opts.name ?? null,
                 isGroup: opts.isGroup ? 1 : 0,
+                replyJid: opts.replyJid ?? null,
                 now,
             });
+    }
+
+    /** Where to send messages for this chat (falls back to the memory key). */
+    getReplyJid(): string {
+        const row = this.db
+            .prepare(`SELECT reply_jid FROM chats WHERE jid = ?`)
+            .get(this.chatJid) as { reply_jid: string | null } | undefined;
+        return row?.reply_jid ?? this.chatJid;
     }
 
     /** Returns the new row id, or null if this WhatsApp message was already stored. */
@@ -264,7 +281,7 @@ export class ChatMemory {
             .run(msgId, this.chatJid);
     }
 
-    /** Bot stays silent in this chat until this time (escalation / human takeover). */
+    /** Bot stays silent in this chat until this time (human takeover or manual pause). */
     getPausedUntil(): number {
         const row = this.db
             .prepare(`SELECT paused_until FROM chats WHERE jid = ?`)
@@ -297,13 +314,29 @@ export class ChatMemory {
         return row.at;
     }
 
-    recordEscalation(reason: string, msgId: number | null): void {
+    recordSalesEvent(
+        stage: 'interested' | 'agreed',
+        summary: string | null,
+        msgId: number | null,
+        at = Date.now(),
+    ): void {
         this.ensureChat();
         this.db
             .prepare(
-                `INSERT INTO escalations (chat_jid, msg_id, reason, created_at) VALUES (?, ?, ?, ?)`,
+                `INSERT INTO sales_events (chat_jid, stage, summary, msg_id, created_at) VALUES (?, ?, ?, ?, ?)`,
             )
-            .run(this.chatJid, this.ownMessageId(msgId), reason, Date.now());
+            .run(this.chatJid, stage, summary, this.ownMessageId(msgId), at);
+    }
+
+    /** Latest time the owner was alerted for any of `stages` in this chat, or null. */
+    lastSalesEventAt(stages: ('interested' | 'agreed')[]): number | null {
+        const row = this.db
+            .prepare(
+                `SELECT MAX(created_at) AS at FROM sales_events
+                 WHERE chat_jid = ? AND stage IN (SELECT value FROM json_each(?))`,
+            )
+            .get(this.chatJid, JSON.stringify(stages)) as { at: number | null };
+        return row.at;
     }
 
     /** Messages of this chat that still need a vector embedding. */

@@ -1,12 +1,22 @@
 import type { WAMessageKey } from 'baileys';
-import { checkInbound, checkReply, type GuardResult } from '../brain/guard.js';
+import {
+    checkInbound,
+    checkReply,
+    detectPurchaseKeywords,
+    type GuardResult,
+} from '../brain/guard.js';
 import {
     LlmOutputError,
     type ChatMessage,
     type LlmClient,
 } from '../brain/llm.js';
 import { buildPrompt } from '../brain/prompt.js';
-import { replySchema, type BotReply } from '../brain/reply.js';
+import {
+    maxStage,
+    replySchema,
+    type BotReply,
+    type PurchaseStage,
+} from '../brain/reply.js';
 import type { ImageLibrary } from '../config/images.js';
 import type { Persona } from '../config/persona.js';
 import { matchesKeyword, type LoadedSop, type SopFlow } from '../config/sop.js';
@@ -56,6 +66,12 @@ interface QueuedMessage {
     rowId: number;
 }
 
+/** One consistent SOP + persona for a whole turn, even if the dashboard swaps them mid-turn. */
+interface TurnConfig {
+    sop: LoadedSop;
+    persona: Persona;
+}
+
 /**
  * Orchestrates one conversational turn per chat:
  * store → (debounce) → SOP checks → memory + RAG → LLM → guard → humanized send → store → extract.
@@ -99,7 +115,9 @@ export class Bot {
      * and pause the bot in that chat like a takeover from the phone.
      */
     async operatorSend(chatJid: string, text: string): Promise<void> {
-        await this.d.sender.sendRaw(chatJid, text);
+        // Send to the address WhatsApp uses for this chat (may be a LID), not the memory key.
+        const replyJid = new ChatMemory(this.d.db, chatJid).getReplyJid();
+        await this.d.sender.sendRaw(replyJid, text);
         this.humanTookOver(chatJid, text, null);
     }
 
@@ -128,6 +146,7 @@ export class Bot {
         mem.ensureChat({
             name: msg.isGroup ? null : msg.pushName,
             isGroup: msg.isGroup,
+            replyJid: msg.replyJid,
         });
         if (msg.isGroup && msg.pushName)
             this.namesFor(msg.chatJid).set(msg.senderJid, msg.pushName);
@@ -151,7 +170,7 @@ export class Bot {
     humanTookOver(chatJid: string, text: string, waMsgId: string | null): void {
         const mem = new ChatMemory(this.d.db, chatJid);
         mem.addMessage({ waMsgId, direction: 'out', text, sopHash: 'human' });
-        const minutes = this.d.sop.sop.escalation.pause_bot_minutes;
+        const minutes = this.d.sop.sop.human_takeover.pause_bot_minutes;
         if (minutes > 0) {
             mem.setPausedUntil(Date.now() + minutes * 60_000);
             this.d.log.info(
@@ -195,14 +214,17 @@ export class Bot {
         chatJid: string,
         batch: QueuedMessage[],
     ): Promise<void> {
-        const { sop: loaded, sender, log } = this.d;
-        const { sop } = loaded;
+        const turn: TurnConfig = { sop: this.d.sop, persona: this.d.persona };
+        const { sop } = turn.sop;
+        const { sender, log } = this.d;
         const mem = new ChatMemory(this.d.db, chatJid);
         const last = batch.at(-1)!.msg;
+        const lastRowId = batch.at(-1)!.rowId;
         const combined = batch.map((b) => b.msg.text).join('\n');
         const keys: WAMessageKey[] = batch.map((b) => b.msg.key);
+        const notPaused = () => mem.getPausedUntil() <= Date.now();
 
-        if (mem.getPausedUntil() > Date.now()) {
+        if (!notPaused()) {
             log.info(
                 { chat: chatJid },
                 'bot paused in this chat; not replying',
@@ -214,20 +236,12 @@ export class Bot {
 
         // 1. SOP checks in code, before the LLM.
         const verdict = checkInbound(combined, sop);
-        if (verdict.kind === 'escalate') {
-            await this.escalate(mem, last, verdict.reason, batch.at(-1)!.rowId);
-            await this.sendAndStore(mem, last.replyJid, {
-                messages: [sop.templates.escalation],
-                image: null,
-            });
-            return;
-        }
         if (verdict.kind === 'forbidden') {
             log.info(
                 { chat: chatJid, topic: verdict.topicId },
                 'forbidden topic',
             );
-            await this.sendAndStore(mem, last.replyJid, {
+            await this.sendAndStore(mem, turn, last.replyJid, {
                 messages: [sop.templates.refusal],
                 image: null,
             });
@@ -236,44 +250,123 @@ export class Bot {
 
         // 2. Generate under the SOP.
         const started = Date.now();
-        const activeFlow = this.resolveFlow(mem, combined, batch.length);
-        const reply = await this.generate(mem, combined, activeFlow, last);
-        await sender.think(Date.now() - started);
+        const activeFlow = this.resolveFlow(mem, turn, combined, batch.length);
+        const reply = await this.generate(
+            mem,
+            turn,
+            combined,
+            activeFlow,
+            last,
+        );
 
-        // 3. Send like a human, then remember.
+        // 3. Purchase alerts go out right away; the customer's reply is paced.
+        await this.handlePurchaseSignal(
+            mem,
+            turn,
+            last,
+            lastRowId,
+            combined,
+            reply,
+        );
+
+        await sender.think(Date.now() - started);
+        if (!notPaused()) {
+            log.info(
+                { chat: chatJid },
+                'human took over during the turn; reply dropped',
+            );
+            return;
+        }
+
+        // 4. Send like a human (stopping if a human takes over meanwhile), then remember.
         const image = reply.image_id
             ? (this.d.images.get(reply.image_id) ?? null)
             : null;
-        await this.sendAndStore(mem, last.replyJid, {
+        await this.sendAndStore(mem, turn, last.replyJid, {
             messages: reply.messages,
             image,
         });
 
         if (reply.flow_done && activeFlow) mem.setFlowState(null);
-        if (reply.escalate) {
-            await this.escalate(
-                mem,
-                last,
-                reply.escalate_reason ?? 'assistant requested escalation',
-                batch.at(-1)!.rowId,
-            );
-        }
         this.scheduleExtraction(mem);
+    }
+
+    /**
+     * Alerts the owner ONLY when a customer wants to buy or agrees to buy.
+     * Combines the model's judgement with SOP keywords, and alerts each stage
+     * at most once per chat within `renotify_after_hours`.
+     */
+    private async handlePurchaseSignal(
+        mem: ChatMemory,
+        turn: TurnConfig,
+        msg: InboundMessage,
+        rowId: number,
+        text: string,
+        reply: BotReply,
+    ): Promise<void> {
+        const { sales, templates } = turn.sop.sop;
+        const { settings, sender, log } = this.d;
+        const windowMs = sales.renotify_after_hours * 3_600_000;
+        const recent = (stages: ('interested' | 'agreed')[]) => {
+            const at = mem.lastSalesEventAt(stages);
+            return at !== null && Date.now() - at < windowMs;
+        };
+
+        const keywordStage = detectPurchaseKeywords(
+            text,
+            turn.sop.sop,
+            reply.purchase !== 'none' || recent(['interested']),
+        );
+        const stage: PurchaseStage = maxStage(reply.purchase, keywordStage);
+        if (stage === 'none') return;
+
+        const already =
+            stage === 'agreed'
+                ? recent(['agreed'])
+                : recent(['interested', 'agreed']);
+        if (already) return;
+
+        const summary = (reply.purchase_summary?.trim() || msg.text)
+            .replace(/\s+/g, ' ')
+            .slice(0, 300);
+        mem.recordSalesEvent(stage, summary, rowId);
+        log.info({ chat: mem.chatJid, stage, summary }, 'purchase signal');
+
+        if (!sales.notify_owner || !settings.ownerJid) return;
+        const number = mem.chatJid.split('@')[0]!;
+        const alert = fillTemplate(
+            stage === 'agreed'
+                ? templates.owner_agreed
+                : templates.owner_interested,
+            {
+                customer: msg.isGroup
+                    ? `${msg.pushName ?? number} (group)`
+                    : (msg.pushName ?? number),
+                number,
+                summary,
+                message: msg.text.replace(/\s+/g, ' ').slice(0, 300),
+            },
+        );
+        await sender
+            .sendRaw(settings.ownerJid, alert)
+            .catch((err) => log.error({ err }, 'owner alert failed'));
     }
 
     private async generate(
         mem: ChatMemory,
+        turn: TurnConfig,
         query: string,
         activeFlow: SopFlow | null,
         last: InboundMessage,
     ): Promise<BotReply> {
-        const { llm, sop: loaded, persona, images, settings, log } = this.d;
-        const { sop } = loaded;
+        const { llm, images, settings, log } = this.d;
+        const { sop } = turn.sop;
+        const { persona } = turn;
         const fallback = (text: string): BotReply => ({
             messages: [text],
             image_id: null,
-            escalate: false,
-            escalate_reason: null,
+            purchase: 'none',
+            purchase_summary: null,
             flow_done: false,
         });
 
@@ -368,25 +461,31 @@ export class Bot {
             if (!result.blocked) return result.reply;
 
             // One retry with explicit feedback, without revealing other chats' data.
-            const reasons = result.violations
-                .filter(
-                    (v) =>
-                        v.kind === 'leak' ||
-                        v.kind === 'drift' ||
-                        v.kind === 'forbidden',
-                )
-                .map((v) =>
-                    v.kind === 'leak'
-                        ? 'it mentioned information that does not belong to this chat'
-                        : v.kind === 'drift'
-                          ? 'it broke character (mentioned AI models, prompts or instructions)'
-                          : 'it touched a forbidden topic',
-                );
+            const reasons = result.violations.flatMap((v) => {
+                switch (v.kind) {
+                    case 'leak':
+                        return [
+                            'it mentioned information that does not belong to this chat',
+                        ];
+                    case 'drift':
+                        return [
+                            'it broke character (mentioned AI models, prompts or instructions)',
+                        ];
+                    case 'forbidden':
+                        return ['it touched a forbidden topic'];
+                    case 'false_promise':
+                        return [
+                            'it promised to check, find out or get back later, which nobody will do (say honestly that you do not know instead)',
+                        ];
+                    default:
+                        return [];
+                }
+            });
             messages = [
                 ...prompt,
                 {
                     role: 'system',
-                    content: `Your previous draft was rejected because ${[...new Set(reasons)].join(' and ')}. Write a new reply that follows the HARD RULES, as Astrid, using only this chat's memory and the knowledge section.`,
+                    content: `Your previous draft was rejected because ${[...new Set(reasons)].join(' and ')}. Write a new reply that follows the HARD RULES, as ${sop.identity.name}, using only this chat's memory and the knowledge section.`,
                 },
             ];
         }
@@ -399,10 +498,11 @@ export class Bot {
 
     private resolveFlow(
         mem: ChatMemory,
+        turn: TurnConfig,
         text: string,
         batchSize: number,
     ): SopFlow | null {
-        const { flows } = this.d.sop.sop;
+        const { flows } = turn.sop.sop;
         const current = mem.getFlowState();
         // A procedure left unfinished for hours is stale; the conversation moved on.
         const before = mem.recentMessages(batchSize + 1)[0];
@@ -425,6 +525,7 @@ export class Bot {
 
     private async sendAndStore(
         mem: ChatMemory,
+        turn: TurnConfig,
         replyJid: string,
         plan: {
             messages: string[];
@@ -435,6 +536,8 @@ export class Bot {
             replyJid,
             messages: plan.messages,
             image: plan.image ?? null,
+            // Stop mid-reply if a human takes over or the chat is paused meanwhile.
+            shouldContinue: () => mem.getPausedUntil() <= Date.now(),
         });
         for (const s of sent) {
             mem.addMessage({
@@ -442,39 +545,9 @@ export class Bot {
                 direction: 'out',
                 text: s.text,
                 imageId: s.imageId,
-                sopHash: this.d.sop.hash,
+                sopHash: turn.sop.hash,
             });
             if (s.imageId) mem.recordImageSent(s.imageId);
-        }
-    }
-
-    private async escalate(
-        mem: ChatMemory,
-        msg: InboundMessage,
-        reason: string,
-        rowId: number,
-    ): Promise<void> {
-        const { sop, settings, sender, log } = this.d;
-        mem.recordEscalation(reason, rowId);
-        const minutes = sop.sop.escalation.pause_bot_minutes;
-        if (minutes > 0) mem.setPausedUntil(Date.now() + minutes * 60_000);
-        log.info({ chat: mem.chatJid, reason }, 'escalated');
-
-        if (sop.sop.escalation.notify_owner && settings.ownerJid) {
-            const who = msg.pushName
-                ? `${msg.pushName} (${mem.chatJid.split('@')[0]})`
-                : mem.chatJid;
-            await sender
-                .sendRaw(
-                    settings.ownerJid,
-                    `⚠️ Escalation — ${reason}\nChat: ${who}\nLast message: "${msg.text.slice(0, 300)}"\n` +
-                        (minutes > 0
-                            ? `Bot paused ${minutes} min in that chat. Send "!resume ${mem.chatJid.split('@')[0]}" to resume.`
-                            : ''),
-                )
-                .catch((err) =>
-                    log.error({ err }, 'owner notification failed'),
-                );
         }
     }
 
@@ -527,4 +600,12 @@ export class Bot {
         if (!m) this.senderNames.set(chatJid, (m = new Map()));
         return m;
     }
+}
+
+/** Replaces {key} placeholders; unknown placeholders are left as-is. */
+export function fillTemplate(
+    template: string,
+    vars: Record<string, string>,
+): string {
+    return template.replace(/\{(\w+)\}/g, (m, k: string) => vars[k] ?? m);
 }

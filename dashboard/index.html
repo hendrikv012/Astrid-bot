@@ -232,6 +232,13 @@
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
+            .field small.override {
+                color: var(--warn);
+            }
+            .tag.sale {
+                background: var(--out);
+                color: var(--ok);
+            }
             .tag {
                 font-size: 11px;
                 font-weight: 500;
@@ -553,6 +560,9 @@
                         <button class="secondary" id="settingsReset">
                             Discard changes
                         </button>
+                        <button class="danger" id="settingsDefaults">
+                            Reset all to .env
+                        </button>
                     </div>
                     <div id="settingsMsg"></div>
                 </div>
@@ -639,6 +649,15 @@
                 }
                 return node;
             };
+            /** replaceChildren that skips null/false (replaceChildren would print "null"). */
+            const fill = (node, ...children) =>
+                node.replaceChildren(
+                    ...children
+                        .flat()
+                        .filter(
+                            (c) => c !== null && c !== undefined && c !== false,
+                        ),
+                );
             const fmtTime = (ts) =>
                 ts
                     ? new Date(ts).toLocaleString([], {
@@ -740,11 +759,11 @@
                 pill.textContent =
                     STATUS_LABEL[s.connection.status] || s.connection.status;
                 pill.className = `pill ${s.connection.status === 'open' ? 'open' : ''}`;
-                if (currentTab === 'status') renderStatus(s);
                 return s;
             }
-            function renderStatus(s) {
-                $('statusConn').replaceChildren(
+            function renderStatus(s, t) {
+                fill(
+                    $('statusConn'),
                     el(
                         'h2',
                         {},
@@ -760,7 +779,6 @@
                         : null,
                     el('p', { class: 'muted' }, `SOP version ${s.sopHash}`),
                 );
-                const t = s.stats;
                 const tile = (n, l) =>
                     el(
                         'div',
@@ -772,7 +790,8 @@
                     tile(t.chats, 'chats'),
                     tile(t.messagesToday, 'messages received today'),
                     tile(t.repliesToday, 'messages sent today'),
-                    tile(t.escalationsToday, 'escalations today'),
+                    tile(t.interestedToday, 'wanted to buy today'),
+                    tile(t.agreedToday, 'agreed to buy today'),
                     tile(t.pausedChats, 'chats paused'),
                     tile(
                         `${t.kbDocuments} / ${t.kbChunks}`,
@@ -794,7 +813,14 @@
                         : '',
                 );
             }
-            loaders.status = refreshStatus;
+            // Stats scan the DB, so they are only loaded while the Status tab is open.
+            loaders.status = async () => {
+                const [s, { stats }] = await Promise.all([
+                    refreshStatus(),
+                    api('GET', '/api/stats'),
+                ]);
+                renderStatus(s, stats);
+            };
 
             // ---------- chats ----------
             let selectedChat = null;
@@ -835,11 +861,16 @@
                                                 'paused',
                                             )
                                           : null,
-                                      c.escalations
+                                      c.salesStage
                                           ? el(
                                                 'span',
-                                                { class: 'tag' },
-                                                `${c.escalations}⚠`,
+                                                {
+                                                    class: 'tag sale',
+                                                    title: `Owner alerted ${fmtTime(c.salesAt)}`,
+                                                },
+                                                c.salesStage === 'agreed'
+                                                    ? '✅ agreed to buy'
+                                                    : '🛒 wants to buy',
                                             )
                                           : null,
                                   ),
@@ -875,7 +906,8 @@
                 const now = Date.now();
                 const paused = c.pausedUntil > now;
 
-                $('convHead').replaceChildren(
+                fill(
+                    $('convHead'),
                     el('strong', {}, chatNames.get(c.jid) || number(c.jid)),
                     chatNames.get(c.jid)
                         ? el('span', { class: 'muted' }, `+${number(c.jid)}`)
@@ -947,7 +979,8 @@
                 lastMsgCount = c.messages.length;
                 $('composer').hidden = false;
 
-                $('side').replaceChildren(
+                fill(
+                    $('side'),
                     el('h3', {}, 'Known facts (this chat only)'),
                     ...(c.facts.length
                         ? c.facts.map((f) =>
@@ -1092,7 +1125,7 @@
                             'chatModel',
                             'Chat model',
                             'select',
-                            'Installed Ollama models',
+                            'Installed Ollama chat models',
                         ],
                         [
                             'temperature',
@@ -1100,8 +1133,8 @@
                             'range',
                             'Lower = more consistent, higher = more varied',
                             0,
-                            1.5,
-                            0.05,
+                            2,
+                            0.01,
                         ],
                     ],
                 ],
@@ -1147,8 +1180,8 @@
                             'range',
                             '6 chars/s ≈ 50 words/min',
                             1,
-                            15,
-                            0.5,
+                            30,
+                            0.1,
                         ],
                         [
                             'typingCpsMax',
@@ -1156,8 +1189,8 @@
                             'range',
                             '',
                             1,
-                            15,
-                            0.5,
+                            30,
+                            0.1,
                         ],
                         [
                             'typingPauseChance',
@@ -1166,7 +1199,7 @@
                             'Per ~4–9 s of typing',
                             0,
                             1,
-                            0.05,
+                            0.01,
                         ],
                         [
                             'distractionChance',
@@ -1175,7 +1208,7 @@
                             '3–15 s delay before typing',
                             0,
                             1,
-                            0.05,
+                            0.01,
                         ],
                     ],
                 ],
@@ -1205,9 +1238,9 @@
                             'Knowledge match strictness',
                             'range',
                             'Lower = only very relevant chunks',
-                            0.1,
-                            1.5,
-                            0.05,
+                            0,
+                            2,
+                            0.01,
                         ],
                         [
                             'imageResendHours',
@@ -1233,10 +1266,17 @@
                 ],
             ];
             let savedSettings = null;
+            let envDefaults = {};
+            let overridden = new Set();
 
             async function loadSettings() {
-                const { settings, models } = await api('GET', '/api/settings');
+                const { settings, models, defaults, overrides } = await api(
+                    'GET',
+                    '/api/settings',
+                );
                 savedSettings = settings;
+                envDefaults = defaults;
+                overridden = new Set(overrides);
                 renderSettings(settings, models);
                 $('settingsMsg').replaceChildren();
             }
@@ -1300,17 +1340,40 @@
                         'data-num': '1',
                     });
                 }
+                // Only fields the user actually touched are sent back, so the
+                // browser's clamping/snapping never rewrites untouched values.
+                ctl.addEventListener(
+                    'input',
+                    (e) => (e.target.dataset.dirty = '1'),
+                );
+                ctl.addEventListener(
+                    'change',
+                    (e) => (e.target.dataset.dirty = '1'),
+                );
+                const envNote = overridden.has(key)
+                    ? el(
+                          'small',
+                          { class: 'override' },
+                          `Changed here (.env: ${envDefaults[key]})`,
+                      )
+                    : null;
                 return el(
                     'div',
                     { class: 'field' },
-                    el('label', {}, label, hint ? el('small', {}, hint) : null),
+                    el(
+                        'label',
+                        {},
+                        label,
+                        hint ? el('small', {}, hint) : null,
+                        envNote,
+                    ),
                     el('div', { class: 'ctl' }, ctl),
                 );
             }
             function collectSettings() {
                 const out = { ...savedSettings };
                 for (const input of $('settingsForm').querySelectorAll(
-                    '[data-key]',
+                    '[data-key][data-dirty]',
                 )) {
                     const k = input.dataset.key;
                     out[k] =
@@ -1324,12 +1387,8 @@
             }
             $('settingsSave').onclick = async () => {
                 try {
-                    const { settings } = await api(
-                        'PUT',
-                        '/api/settings',
-                        collectSettings(),
-                    );
-                    savedSettings = settings;
+                    await api('PUT', '/api/settings', collectSettings());
+                    await loadSettings();
                     flash(
                         'settingsMsg',
                         'ok',
@@ -1340,6 +1399,21 @@
                 }
             };
             $('settingsReset').onclick = loadSettings;
+            $('settingsDefaults').onclick = async () => {
+                if (
+                    !confirm(
+                        'Drop all dashboard changes and use the .env values?',
+                    )
+                )
+                    return;
+                try {
+                    await api('DELETE', '/api/settings');
+                    await loadSettings();
+                    flash('settingsMsg', 'ok', 'Back to the .env values.');
+                } catch (e) {
+                    flash('settingsMsg', 'err', e.message);
+                }
+            };
             loaders.settings = loadSettings;
 
             // ---------- knowledge ----------
@@ -1513,7 +1587,11 @@
                 clearInterval(timer);
                 timer = setInterval(() => {
                     if (document.hidden) return;
-                    refreshStatus().catch(() => {});
+                    if (currentTab === 'status') {
+                        loaders.status().catch(() => {});
+                    } else {
+                        refreshStatus().catch(() => {});
+                    }
                     if (currentTab === 'chats') loaders.chats().catch(() => {});
                 }, 5000);
             }

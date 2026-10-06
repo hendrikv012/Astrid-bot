@@ -1,14 +1,10 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { OllamaLlm } from './brain/llm.js';
+import { OllamaLlm, sameModel } from './brain/llm.js';
 import { loadEnv } from './config/env.js';
 import { loadImages } from './config/images.js';
 import { loadPersona } from './config/persona.js';
-import {
-    loadRuntimeSettings,
-    saveRuntimeSettings,
-    settingsFromEnv,
-} from './config/runtime.js';
+import { RuntimeStore, settingsFromEnv } from './config/runtime.js';
 import { loadSop } from './config/sop.js';
 import { applyRuntimeSettings } from './dashboard/admin.js';
 import { startDashboard } from './dashboard/server.js';
@@ -54,10 +50,30 @@ async function main(): Promise<void> {
         numCtx: env.LLM_NUM_CTX,
     });
     await llm.assertReady([
-        env.CHAT_MODEL,
         env.EMBED_MODEL,
         ...(env.EXTRACT_MODEL ? [env.EXTRACT_MODEL] : []),
     ]);
+
+    // Live-tunable settings: .env values with saved dashboard changes on top.
+    const runtime = new RuntimeStore(db, settingsFromEnv(env), (m) =>
+        logger.warn(m),
+    );
+    // Check the chat model the bot will actually use (a dashboard choice wins over .env).
+    const chatModels = await llm.listChatModels();
+    const usable = (m: string) => chatModels.some((c) => sameModel(c, m));
+    const chosen = runtime.get().chatModel;
+    if (!usable(chosen)) {
+        if (chosen !== env.CHAT_MODEL && usable(env.CHAT_MODEL)) {
+            logger.warn(
+                `Chat model "${chosen}" picked in the dashboard is not installed; falling back to CHAT_MODEL "${env.CHAT_MODEL}".`,
+            );
+            runtime.set({ ...runtime.get(), chatModel: env.CHAT_MODEL });
+        } else {
+            throw new Error(
+                `Chat model "${chosen}" is not installed in Ollama (or can't chat). Run: ollama pull ${chosen}`,
+            );
+        }
+    }
 
     // Keep the knowledge base in sync on every start (only changed files are re-embedded).
     const kb = await ingestKnowledge(db, llm, env.KNOWLEDGE_DIR, (m) =>
@@ -111,8 +127,6 @@ async function main(): Promise<void> {
         },
     });
 
-    // Live-tunable settings: .env values with saved dashboard changes on top.
-    let runtime = loadRuntimeSettings(db, settingsFromEnv(env));
     const senderOpts = {
         humanize: env.HUMANIZE,
         typing: {
@@ -132,6 +146,11 @@ async function main(): Promise<void> {
             const sent = await rawSender.send(plan);
             for (const s of sent) if (s.waMsgId) botSentIds.add(s.waMsgId);
             return sent;
+        },
+        sendRaw: async (jid, text) => {
+            const id = await rawSender.sendRaw(jid, text);
+            if (id) botSentIds.add(id);
+            return id;
         },
     };
 
@@ -164,12 +183,14 @@ async function main(): Promise<void> {
         },
     });
 
-    const botSettings = bot.settings;
-    applyRuntimeSettings(runtime, {
-        llm,
-        sender: senderOpts,
-        bot: botSettings,
-    });
+    const liveBot = bot;
+    runtime.attach((s) =>
+        applyRuntimeSettings(s, {
+            llm,
+            sender: senderOpts,
+            bot: liveBot.settings,
+        }),
+    );
 
     const knowledgeSync = () =>
         ingestKnowledge(db, llm, env.KNOWLEDGE_DIR, (m) =>
@@ -179,47 +200,43 @@ async function main(): Promise<void> {
     let dashboard: Awaited<ReturnType<typeof startDashboard>> | null = null;
     if (env.DASHBOARD_ENABLED) {
         const token = env.DASHBOARD_TOKEN ?? dashboardToken(db);
-        const liveBot = bot;
-        dashboard = await startDashboard({
-            db,
-            log: logger,
-            token,
-            host: env.DASHBOARD_HOST,
-            port: env.DASHBOARD_PORT,
-            bot: liveBot,
-            paths: {
-                sopFile: path.join(env.CONFIG_DIR, 'astrid.sop.yaml'),
-                personaFile: path.join(env.CONFIG_DIR, 'persona.md'),
-                knowledgeDir: env.KNOWLEDGE_DIR,
-                publicDir: 'dashboard',
-            },
-            images,
-            runtime: {
-                get: () => runtime,
-                set: (next) => {
-                    runtime = next;
-                    applyRuntimeSettings(next, {
-                        llm,
-                        sender: senderOpts,
-                        bot: botSettings,
-                    });
-                    saveRuntimeSettings(db, next);
+        try {
+            dashboard = await startDashboard({
+                db,
+                log: logger,
+                token,
+                host: env.DASHBOARD_HOST,
+                port: env.DASHBOARD_PORT,
+                bot: liveBot,
+                paths: {
+                    sopFile: path.join(env.CONFIG_DIR, 'astrid.sop.yaml'),
+                    personaFile: path.join(env.CONFIG_DIR, 'persona.md'),
+                    knowledgeDir: env.KNOWLEDGE_DIR,
+                    publicDir: 'dashboard',
                 },
-            },
-            connection: conn.state,
-            listModels: () => llm.listModels(),
-            reingest: knowledgeSync,
-        });
-        const addr = dashboard.address() as { port: number };
-        logger.info(
-            `Dashboard: http://${env.DASHBOARD_HOST === '0.0.0.0' ? 'localhost' : env.DASHBOARD_HOST}:${addr.port}/#token=${token}`,
-        );
-        if (
-            env.DASHBOARD_HOST !== '127.0.0.1' &&
-            env.DASHBOARD_HOST !== 'localhost'
-        ) {
-            logger.warn(
-                'Dashboard is reachable from other machines. It shows customer chats — keep the token secret.',
+                images,
+                runtime,
+                connection: conn.state,
+                listChatModels: () => llm.listChatModels(),
+                reingest: knowledgeSync,
+            });
+            const addr = dashboard.address() as { port: number };
+            logger.info(
+                `Dashboard: http://${env.DASHBOARD_HOST === '0.0.0.0' ? 'localhost' : env.DASHBOARD_HOST}:${addr.port}/#token=${token}`,
+            );
+            if (
+                env.DASHBOARD_HOST !== '127.0.0.1' &&
+                env.DASHBOARD_HOST !== 'localhost'
+            ) {
+                logger.warn(
+                    'Dashboard is reachable from other machines. It shows customer chats — keep the token secret.',
+                );
+            }
+        } catch (err) {
+            // The dashboard is optional: never take the WhatsApp bot down with it.
+            logger.error(
+                { err },
+                `Dashboard could not start on ${env.DASHBOARD_HOST}:${env.DASHBOARD_PORT}; the bot keeps running without it. Change DASHBOARD_PORT or set DASHBOARD_ENABLED=false.`,
             );
         }
     }

@@ -45,10 +45,27 @@ export class OllamaLlm implements LlmClient {
         Object.assign(this.opts, patch);
     }
 
-    /** Names of models installed in Ollama. */
-    async listModels(): Promise<string[]> {
+    /**
+     * Installed models that can chat. Embedding-only models (like the one used
+     * for RAG) are left out, because picking one as the chat model would make
+     * every reply fail.
+     */
+    async listChatModels(): Promise<string[]> {
         const { models } = await this.client.list();
-        return models.map((m) => m.name);
+        const checked = await Promise.all(
+            models.map(async (m) => {
+                const caps = await this.client
+                    .show({ model: m.name })
+                    .then((r) => r.capabilities ?? [])
+                    .catch(() => [] as string[]);
+                const canChat = caps.length
+                    ? caps.includes('completion')
+                    : !/embed/i.test(m.name); // older Ollama without capabilities
+                const isEmbedModel = sameModel(m.name, this.opts.embedModel);
+                return canChat && !isEmbedModel ? m.name : null;
+            }),
+        );
+        return checked.filter((n): n is string => n !== null);
     }
 
     async chatJson<T>(
@@ -96,6 +113,12 @@ export class OllamaLlm implements LlmClient {
             );
         }
     }
+}
+
+/** "llama3.1" and "llama3.1:latest" are the same Ollama model. */
+export function sameModel(a: string, b: string): boolean {
+    const norm = (m: string) => (m.includes(':') ? m : `${m}:latest`);
+    return norm(a) === norm(b);
 }
 
 export function parseJsonOutput<T>(raw: string, schema: z.ZodType<T>): T {

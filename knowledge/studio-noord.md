@@ -23,3 +23,7 @@ Appointments are confirmed by a colleague via WhatsApp. Cancel at least 24 hours
 ## Payment
 
 We accept PIN (debit card), credit card and Apple/Google Pay. No cash.
+
+## Contact
+
+Phone: 020 123 4567 (Tuesday to Saturday during opening hours). Email: hallo@studionoord.example. For complaints, refunds or questions the assistant cannot answer, customers can call or email the salon directly.

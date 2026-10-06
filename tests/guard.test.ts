@@ -4,6 +4,7 @@ import {
     checkInbound,
     checkReply,
     cleanWhatsAppText,
+    detectPurchaseKeywords,
     splitBubble,
 } from '../src/brain/guard.js';
 import type { BotReply } from '../src/brain/reply.js';
@@ -16,8 +17,8 @@ const { sop } = loadSop(
 const reply = (over: Partial<BotReply>): BotReply => ({
     messages: ['Hoi!'],
     image_id: null,
-    escalate: false,
-    escalate_reason: null,
+    purchase: 'none',
+    purchase_summary: null,
     flow_done: false,
     ...over,
 });
@@ -30,10 +31,9 @@ const ctx = (over: Partial<Parameters<typeof checkReply>[1]> = {}) => ({
 });
 
 describe('checkInbound', () => {
-    it('detects escalation before forbidden topics', () => {
-        expect(checkInbound('Ik wil een klacht indienen', sop)).toMatchObject({
-            kind: 'escalate',
-            triggerId: 'E2_complaint',
+    it('only blocks forbidden topics (complaints go to the model)', () => {
+        expect(checkInbound('Ik wil een klacht indienen', sop)).toEqual({
+            kind: 'ok',
         });
         expect(
             checkInbound('wat vind je van de verkiezingen', sop),
@@ -42,7 +42,48 @@ describe('checkInbound', () => {
     });
 });
 
+describe('detectPurchaseKeywords', () => {
+    it('flags interest and gates agreement on prior interest', () => {
+        expect(detectPurchaseKeywords('ik wil bestellen', sop, false)).toBe(
+            'interested',
+        );
+        expect(detectPurchaseKeywords('akkoord', sop, false)).toBe('none');
+        expect(detectPurchaseKeywords('akkoord', sop, true)).toBe('agreed');
+        expect(detectPurchaseKeywords('wat kost knippen?', sop, false)).toBe(
+            'none',
+        );
+        // "order" alone is not a keyword ("in order to")
+        expect(
+            detectPurchaseKeywords('in order to know, what time?', sop, false),
+        ).toBe('none');
+    });
+});
+
 describe('checkReply', () => {
+    it.each([
+        'Goeie vraag, ik check het even!',
+        'Ik zoek het uit en kom erop terug.',
+        'Ik laat het je zo weten.',
+        'Ik ga het navragen.',
+        "I'll check and get back to you.",
+        'Let me find out for you.',
+    ])('blocks the false promise in %j', (text) => {
+        const r = checkReply(reply({ messages: [text] }), ctx());
+        expect(r.blocked).toBe(true);
+        expect(r.violations[0]).toMatchObject({ kind: 'false_promise' });
+    });
+
+    it.each([
+        'Een collega neemt contact met je op om het te bevestigen.',
+        'Mag ik vragen hoe je heet?',
+        'Laat het me weten als je nog vragen hebt!',
+        'Dat weet ik helaas niet zeker.',
+    ])('allows %j', (text) => {
+        expect(checkReply(reply({ messages: [text] }), ctx()).blocked).toBe(
+            false,
+        );
+    });
+
     it('blocks replies that mention another chat’s identifiers', () => {
         const r = checkReply(
             reply({ messages: ['Sanne had dezelfde vraag!'] }),

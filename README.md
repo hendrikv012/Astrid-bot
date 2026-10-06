@@ -2,13 +2,14 @@
 
 A WhatsApp customer-service bot built on [Baileys](https://github.com/WhiskeySockets/Baileys) (no browser) and a local LLM via [Ollama](https://ollama.com).
 
-- **Strict SOP** — `config/astrid.sop.yaml` is validated at startup; rules, forbidden topics, escalation and message limits are enforced in code, not just in the prompt.
+- **Strict SOP** — `config/astrid.sop.yaml` is validated at startup; rules, forbidden topics and message limits are enforced in code, not just in the prompt.
+- **Purchase alerts only** — you get a WhatsApp message (at `OWNER_JID`) when a customer wants to buy, and again when they agree to buy, with a one-line summary. Nothing else alerts you. The bot never promises to "check and get back" (a guard rewrites such replies); when it doesn't know, it says so and points to the contact details in `knowledge/`.
 - **Fixed personality** — `config/persona.md` plus few-shot examples, always at the top of the prompt, never summarized away.
 - **Preloaded images** — `config/images.yaml` + `assets/images/`; the model picks an image by id, never resends it too soon.
 - **Human-like pacing** — a random delay before the first reply in a new (or long-quiet) chat, read receipts after a short pause, "typing…" for as long as a person would need with random stops mid-message, a slightly different typing speed each reply, the occasional distraction, and answers split over bubbles.
 - **Per-chat SQLite memory** — every message, extracted facts and rolling summaries, isolated per chat so details never leak between customers.
 - **RAG** — markdown/text in `knowledge/` is chunked, embedded and searched with `sqlite-vec`.
-- **Escalation & human takeover** — the owner gets alerted; the bot goes quiet in that chat when a human replies from the phone.
+- **Human takeover** — when you reply yourself (from the phone or the dashboard), the bot stops, even mid-reply, and stays quiet in that chat for `human_takeover.pause_bot_minutes` (default 60).
 
 ## Requirements
 
@@ -35,12 +36,12 @@ Tip: while testing, set `ALLOWED_JIDS` to your own number so the bot answers nob
 
 ## Customizing
 
-| What                                                                          | Where                                   |
-| ----------------------------------------------------------------------------- | --------------------------------------- |
-| Rules, forbidden topics, escalation keywords, procedures, fixed texts, limits | `config/astrid.sop.yaml`                |
-| Personality, writing style, example conversations                             | `config/persona.md`                     |
-| Images the bot may send                                                       | `config/images.yaml` + `assets/images/` |
-| Business facts (prices, hours, policies…)                                     | `knowledge/*.md`                        |
+| What                                                                                        | Where                                   |
+| ------------------------------------------------------------------------------------------- | --------------------------------------- |
+| Rules, forbidden topics, purchase keywords, procedures, fixed texts and alert texts, limits | `config/astrid.sop.yaml`                |
+| Personality, writing style, example conversations                                           | `config/persona.md`                     |
+| Images the bot may send                                                                     | `config/images.yaml` + `assets/images/` |
+| Business facts (prices, hours, policies…)                                                   | `knowledge/*.md`                        |
 
 The shipped content describes an example hair salon. Replace it with your own business.
 
@@ -60,7 +61,7 @@ The dashboard only listens on localhost. Every API call needs the token. Set `DA
 
 Send these from `OWNER_JID` to the bot's number:
 
-- `!resume 31612345678` — let the bot answer that chat again after an escalation
+- `!resume 31612345678` — let the bot answer that chat again after you took over
 - `!pause 31612345678` — silence the bot in that chat
 
 ## Scripts

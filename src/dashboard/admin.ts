@@ -19,7 +19,9 @@ export interface ChatSummaryRow {
     messageCount: number;
     lastText: string | null;
     lastDirection: 'in' | 'out' | null;
-    escalations: number;
+    /** Latest purchase alert in this chat, if any. */
+    salesStage: 'interested' | 'agreed' | null;
+    salesAt: number | null;
 }
 
 export function listChats(db: DB, search = '', limit = 200): ChatSummaryRow[] {
@@ -31,7 +33,8 @@ export function listChats(db: DB, search = '', limit = 200): ChatSummaryRow[] {
                     (SELECT COUNT(*) FROM messages m WHERE m.chat_jid = c.jid) AS messageCount,
                     (SELECT text FROM messages m WHERE m.chat_jid = c.jid ORDER BY id DESC LIMIT 1) AS lastText,
                     (SELECT direction FROM messages m WHERE m.chat_jid = c.jid ORDER BY id DESC LIMIT 1) AS lastDirection,
-                    (SELECT COUNT(*) FROM escalations e WHERE e.chat_jid = c.jid) AS escalations
+                    (SELECT stage FROM sales_events e WHERE e.chat_jid = c.jid ORDER BY created_at DESC LIMIT 1) AS salesStage,
+                    (SELECT MAX(created_at) FROM sales_events e WHERE e.chat_jid = c.jid) AS salesAt
              FROM chats c
              WHERE c.jid LIKE @like OR IFNULL(c.name, '') LIKE @like
              ORDER BY c.last_seen DESC
@@ -51,7 +54,10 @@ export interface Stats {
     messagesToday: number;
     repliesToday: number;
     pausedChats: number;
-    escalationsToday: number;
+    /** Owner alerts today: customer wants to buy. */
+    interestedToday: number;
+    /** Owner alerts today: customer agreed to buy. */
+    agreedToday: number;
     kbDocuments: number;
     kbChunks: number;
 }
@@ -76,8 +82,12 @@ export function getStats(db: DB, now = Date.now()): Stats {
             `SELECT COUNT(*) AS n FROM chats WHERE paused_until > ?`,
             now,
         ),
-        escalationsToday: one(
-            `SELECT COUNT(*) AS n FROM escalations WHERE created_at >= ?`,
+        interestedToday: one(
+            `SELECT COUNT(*) AS n FROM sales_events WHERE stage = 'interested' AND created_at >= ?`,
+            since,
+        ),
+        agreedToday: one(
+            `SELECT COUNT(*) AS n FROM sales_events WHERE stage = 'agreed' AND created_at >= ?`,
             since,
         ),
         kbDocuments: one(`SELECT COUNT(*) AS n FROM kb_documents`),
