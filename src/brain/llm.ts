@@ -32,16 +32,20 @@ export interface OllamaLlmOptions {
     temperature: number;
     seed: number;
     numCtx: number;
+    /** Called after each chat call with how long the model took. */
+    onChatDone?: (info: { model: string; ms: number }) => void;
+    /** For tests: a stand-in for the Ollama client. */
+    client?: Pick<Ollama, 'chat' | 'embed' | 'list' | 'show'>;
 }
 
 export class OllamaLlm implements LlmClient {
-    private readonly client: Ollama;
+    private readonly client: Pick<Ollama, 'chat' | 'embed' | 'list' | 'show'>;
 
     private readonly opts: OllamaLlmOptions;
 
     constructor(opts: OllamaLlmOptions) {
         this.opts = { ...opts };
-        this.client = new Ollama({ host: opts.host });
+        this.client = opts.client ?? new Ollama({ host: opts.host });
     }
 
     /** Live-tune generation (dashboard). Takes effect on the next call. */
@@ -79,18 +83,25 @@ export class OllamaLlm implements LlmClient {
         schema: z.ZodType<T>,
         { model }: { model?: string } = {},
     ): Promise<T> {
-        const res = await this.client.chat({
-            model: model ?? this.opts.chatModel,
+        const started = Date.now();
+        const name = model ?? this.opts.chatModel;
+        // Streamed so slow machines don't hit fetch's 5-minute wait for
+        // response headers (a non-streamed reply sends nothing until it's done).
+        const stream = await this.client.chat({
+            model: name,
             messages,
             format: z.toJSONSchema(schema),
-            stream: false,
+            stream: true,
             options: {
                 temperature: this.opts.temperature,
                 seed: this.opts.seed,
                 num_ctx: this.opts.numCtx,
             },
         });
-        return parseJsonOutput(res.message.content, schema);
+        let content = '';
+        for await (const part of stream) content += part.message.content;
+        this.opts.onChatDone?.({ model: name, ms: Date.now() - started });
+        return parseJsonOutput(content, schema);
     }
 
     async embed(texts: string[]): Promise<number[][]> {

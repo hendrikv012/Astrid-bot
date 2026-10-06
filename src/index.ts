@@ -52,6 +52,11 @@ async function main(): Promise<void> {
         temperature: env.LLM_TEMPERATURE,
         seed: env.LLM_SEED,
         numCtx: env.LLM_NUM_CTX,
+        onChatDone: ({ model, ms }) =>
+            logger.info(
+                { model, seconds: Math.round(ms / 100) / 10 },
+                'model answered',
+            ),
     });
     await llm.assertReady([
         env.EMBED_MODEL,
