@@ -2,6 +2,7 @@ import type { Persona } from '../config/persona.js';
 import type { Sop, SopFlow } from '../config/sop.js';
 import type { Fact, StoredMessage } from '../memory/ChatMemory.js';
 import type { KbHit } from '../rag/retrieve.js';
+import { LANGUAGE_NAMES, type Language } from './language.js';
 import type { ChatMessage } from './llm.js';
 import { renderAssistantTurn } from './reply.js';
 
@@ -27,6 +28,8 @@ export interface PromptInput {
     history: StoredMessage[];
     /** Display names for group senders, keyed by sender JID. */
     senderNames?: Map<string, string>;
+    /** Language the customer writes in, when it can be told (rule R4). */
+    replyLanguage?: Language | null;
     /** Rough token budget for the whole prompt. */
     maxTokens: number;
 }
@@ -80,6 +83,27 @@ export function buildPrompt(input: PromptInput): ChatMessage[] {
     while (kept[0]?.role === 'assistant') kept.shift();
 
     return [...core, { role: 'system', content: contextMsg }, ...kept];
+}
+
+/**
+ * Tokens the persona, SOP and examples take on their own, which is the part
+ * that is never trimmed. If this doesn't fit in the model's context, Ollama
+ * cuts off the start of the prompt (the rules) and the bot drifts.
+ */
+export function corePromptTokens(persona: Persona, sop: Sop): number {
+    return buildPrompt({
+        persona,
+        sop,
+        activeFlow: null,
+        images: [],
+        chat: { name: null, isGroup: false },
+        facts: [],
+        summary: null,
+        recalled: [],
+        kb: [],
+        history: [],
+        maxTokens: Number.MAX_SAFE_INTEGER,
+    }).reduce((n, m) => n + estimateTokens(m.content), 0);
 }
 
 function renderCore({
@@ -228,6 +252,14 @@ function renderContext(input: PromptInput): string {
             'No relevant knowledge found for this message. Do not guess business facts.',
         );
     }
+    lines.push(
+        '',
+        '# THIS REPLY',
+        input.replyLanguage
+            ? `The customer writes in ${LANGUAGE_NAMES[input.replyLanguage]}. Write your reply in ${LANGUAGE_NAMES[input.replyLanguage]}.`
+            : "Reply in the customer's language.",
+        "The example conversations are other people: never use names or details from them. Only use this chat's name if the customer gave it.",
+    );
     return lines.join('\n');
 }
 

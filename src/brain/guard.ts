@@ -1,4 +1,5 @@
 import { matchesKeyword, type Sop } from '../config/sop.js';
+import { detectLanguage, type Language } from './language.js';
 import type { BotReply, PurchaseStage } from './reply.js';
 
 export type InboundVerdict =
@@ -43,6 +44,8 @@ export type Violation =
     | { kind: 'drift'; match: string }
     | { kind: 'forbidden'; topicId: string }
     | { kind: 'false_promise'; match: string }
+    | { kind: 'language'; expected: Language; got: Language }
+    | { kind: 'example_name'; name: string }
     | { kind: 'image_dropped'; imageId: string; why: string }
     | { kind: 'trimmed'; detail: string };
 
@@ -52,6 +55,12 @@ export interface GuardContext {
     foreignIdentifiers: string[];
     /** Image ids that exist AND were not sent recently in this chat. */
     allowedImageIds: Set<string>;
+    /** Language the customer writes in; a reply clearly in the other one is blocked. */
+    language?: Language | null;
+    /** Names from the persona examples (see config/persona.ts). */
+    exampleNames?: string[];
+    /** This chat's own text (customer messages, push name, facts): names in it are fine. */
+    chatText?: string;
 }
 
 export interface GuardResult {
@@ -68,7 +77,7 @@ export interface GuardResult {
 const DRIFT_PATTERNS: RegExp[] = [
     /\bas an? (ai|artificial intelligence|language model|llm)\b/i,
     /\bals (een )?(ai|taalmodel|kunstmatige intelligentie)\b/i,
-    /\b(chatgpt|openai|qwen|llama|mistral|gemma|ollama|anthropic|claude)\b/i,
+    /\b(chatgpt|openai|qwen|llama|mistral|gemma|ollama|anthropic|claude|deepseek|nous research|hermes 3)\b/i,
     /\b(system prompt|systeemprompt|my instructions|mijn instructies)\b/i,
 ];
 
@@ -144,6 +153,22 @@ export function checkReply(raw: BotReply, ctx: GuardContext): GuardResult {
         const m = re.exec(joined);
         if (m) {
             violations.push({ kind: 'false_promise', match: m[0] });
+            blocked = true;
+        }
+    }
+
+    const chatText = (ctx.chatText ?? '').toLowerCase();
+    for (const name of ctx.exampleNames ?? []) {
+        const n = name.toLowerCase();
+        if (containsToken(joined, n) && !containsToken(chatText, n)) {
+            violations.push({ kind: 'example_name', name });
+            blocked = true;
+        }
+    }
+    if (ctx.language) {
+        const got = detectLanguage(joined);
+        if (got && got !== ctx.language) {
+            violations.push({ kind: 'language', expected: ctx.language, got });
             blocked = true;
         }
     }

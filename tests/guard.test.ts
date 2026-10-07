@@ -155,3 +155,51 @@ describe('text helpers', () => {
         expect(parts).toEqual(['Een. Twee.', 'Drie.']);
     });
 });
+
+describe('drift found in sandbox testing', () => {
+    it('blocks a name copied from the persona examples', () => {
+        const r = checkReply(
+            reply({ messages: ['Hallo Sanne, waarmee kan ik helpen?'] }),
+            ctx({ exampleNames: ['Sanne'], chatText: 'hey' }),
+        );
+        expect(r.blocked).toBe(true);
+        expect(r.violations).toContainEqual({
+            kind: 'example_name',
+            name: 'Sanne',
+        });
+    });
+
+    it('allows that name when this customer really is called that', () => {
+        const r = checkReply(
+            reply({ messages: ['Hoi Sanne!'] }),
+            ctx({ exampleNames: ['Sanne'], chatText: 'Ik ben Sanne' }),
+        );
+        expect(r.blocked).toBe(false);
+    });
+
+    it('blocks a Dutch reply to an English customer', () => {
+        const r = checkReply(
+            reply({
+                messages: [
+                    'Hallo, ik help met je haar 😊',
+                    'Wat wil je nu even?',
+                ],
+            }),
+            ctx({ language: 'en' }),
+        );
+        expect(r.violations).toContainEqual({
+            kind: 'language',
+            expected: 'en',
+            got: 'nl',
+        });
+        expect(r.blocked).toBe(true);
+    });
+
+    it('does not judge language when it cannot tell', () => {
+        const r = checkReply(
+            reply({ messages: ['Top! 😊'] }),
+            ctx({ language: 'en' }),
+        );
+        expect(r.blocked).toBe(false);
+    });
+});

@@ -553,3 +553,21 @@ describe('inbound logging', () => {
         );
     });
 });
+
+describe('language rule R4 in code', () => {
+    it('tells the model the language and retries a reply in the wrong one', async () => {
+        llm.replies.push(
+            () => ({ messages: ['Hallo, wat wil je nu even doen?'] }),
+            () => ({ messages: ['Hi! What can I do for you today?'] }),
+        );
+        await say(A, 'hey, what do you do? i am so tired today');
+        expect(allText(llm.prompts[0]!.messages)).toContain(
+            'Write your reply in English',
+        );
+        expect(llm.prompts).toHaveLength(2);
+        expect(allText(llm.prompts[1]!.messages)).toContain(
+            'the customer writes in English',
+        );
+        expect(sender.delivered).toEqual(['Hi! What can I do for you today?']);
+    });
+});

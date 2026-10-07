@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { WAMessageStubType } from 'baileys';
 import { OllamaLlm, sameModel } from './brain/llm.js';
+import { corePromptTokens } from './brain/prompt.js';
 import { isBehind, ScheduledLlm } from './brain/scheduler.js';
 import { loadEnv } from './config/env.js';
 import { loadImages } from './config/images.js';
@@ -42,6 +43,12 @@ async function main(): Promise<void> {
             images: images.size,
         },
         'configuration loaded',
+    );
+
+    warnIfContextTooSmall(
+        corePromptTokens(persona, sop.sop),
+        env.LLM_NUM_CTX,
+        env.LLM_MAX_TOKENS,
     );
 
     const db = openDb({ path: env.DB_PATH, embedDim: env.EMBED_DIM });
@@ -340,6 +347,30 @@ async function main(): Promise<void> {
     };
     process.on('SIGINT', () => void shutdown('SIGINT'));
     process.on('SIGTERM', () => void shutdown('SIGTERM'));
+}
+
+/**
+ * The rules, persona and examples are never trimmed. When they don't fit in
+ * LLM_NUM_CTX next to the reply, Ollama cuts off the start of the prompt
+ * (the rules), so the bot ignores its SOP.
+ */
+function warnIfContextTooSmall(
+    core: number,
+    numCtx: number,
+    maxTokens: number,
+): void {
+    // Room left for memory, knowledge and the conversation itself.
+    const room = numCtx - maxTokens - core;
+    if (room < 512) {
+        logger.warn(
+            {
+                rulesTokens: core,
+                LLM_NUM_CTX: numCtx,
+                LLM_MAX_TOKENS: maxTokens,
+            },
+            `LLM_NUM_CTX is too small: the SOP, persona and examples alone need ~${core} tokens, leaving ${room} for knowledge and the conversation. The model will lose rules or context. Use LLM_NUM_CTX=${Math.max(4096, 2 ** Math.ceil(Math.log2(core + maxTokens + 1024)))} or shorten the persona/SOP.`,
+        );
+    }
 }
 
 /** A random dashboard token, generated once and kept in the DB across restarts. */

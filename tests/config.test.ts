@@ -111,3 +111,13 @@ describe('parsePersona', () => {
         ]);
     });
 });
+
+describe('persona example names', () => {
+    it('finds customer names used in the examples, not the bot', () => {
+        const p = parsePersona(
+            'Persona\n\n## Examples\n\nUser: Ik ben Sanne, wat kost knippen?\nAstrid: Hoi Sanne!\n\nUser: hi\nAstrid: Hi! I am Astrid',
+            'Astrid',
+        );
+        expect(p.exampleNames).toEqual(['Sanne']);
+    });
+});

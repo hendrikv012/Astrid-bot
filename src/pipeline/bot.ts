@@ -10,6 +10,7 @@ import {
     type ChatMessage,
     type LlmClient,
 } from '../brain/llm.js';
+import { detectLanguage, LANGUAGE_NAMES } from '../brain/language.js';
 import { buildPrompt } from '../brain/prompt.js';
 import {
     maxStage,
@@ -433,11 +434,20 @@ export class Bot {
             imageOptions.filter((i) => !i.recentlySent).map((i) => i.id),
         );
 
+        // R4: answer in the customer's language. This turn decides; earlier messages break a tie.
+        const customerText = history
+            .filter((m) => m.direction === 'in')
+            .map((m) => m.text);
+        const replyLanguage =
+            detectLanguage(query) ??
+            detectLanguage(customerText.slice(-5).join('\n'));
+
         const prompt = buildPrompt({
             persona,
             sop,
             activeFlow,
             images: imageOptions,
+            replyLanguage,
             attachedImage: attached
                 ? { id: attached.id, viewOnce: attached.viewOnce }
                 : null,
@@ -469,6 +479,14 @@ export class Bot {
                     .join('\n'),
             ),
             allowedImageIds,
+            language: replyLanguage,
+            exampleNames: persona.exampleNames,
+            chatText: [
+                ...customerText,
+                query,
+                last.pushName ?? '',
+                ...mem.getFacts().map((f) => f.value),
+            ].join('\n'),
         };
 
         let messages: ChatMessage[] = prompt;
@@ -513,6 +531,14 @@ export class Bot {
                     case 'false_promise':
                         return [
                             'it promised to check, find out or get back later, which nobody will do (say honestly that you do not know instead)',
+                        ];
+                    case 'language':
+                        return [
+                            `it was written in ${LANGUAGE_NAMES[v.got]} but the customer writes in ${LANGUAGE_NAMES[v.expected]} (write the whole reply in ${LANGUAGE_NAMES[v.expected]})`,
+                        ];
+                    case 'example_name':
+                        return [
+                            `it called the customer "${v.name}", a name from the example conversations, not this customer's name`,
                         ];
                     default:
                         return [];
