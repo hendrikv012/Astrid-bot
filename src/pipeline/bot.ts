@@ -257,7 +257,12 @@ export class Bot {
         }
 
         log.info({ chat: chatJid, messages: batch.length }, 'replying');
-        await sender.markRead(keys, combined.length);
+        // The model starts while the bot "reads"; nothing is sent before the
+        // read receipt, so the customer sees the same pace with less waiting.
+        const reading = sender
+            .markRead(keys, combined.length)
+            .then(() => Date.now());
+        reading.catch(() => {}); // awaited below; avoid an unhandled rejection if we return first
 
         // 1. SOP checks in code, before the LLM.
         const verdict = checkInbound(combined, sop);
@@ -266,6 +271,7 @@ export class Bot {
                 { chat: chatJid, topic: verdict.topicId },
                 'forbidden topic',
             );
+            await reading;
             await this.sendAndStore(mem, turn, last.replyJid, {
                 messages: [sop.templates.refusal],
                 image: welcome,
@@ -275,7 +281,6 @@ export class Bot {
         }
 
         // 2. Generate under the SOP.
-        const started = Date.now();
         const activeFlow = this.resolveFlow(mem, turn, combined, batch.length);
         // An image the customer asked for by keyword is sent by code, not left to the model.
         const requested = welcome ?? this.requestedImage(mem, combined);
@@ -298,7 +303,9 @@ export class Bot {
             reply,
         );
 
-        await sender.think(Date.now() - started);
+        // Time the model needed after the read receipt counts as "thinking".
+        const readAt = await reading;
+        await sender.think(Date.now() - readAt);
         if (!notPaused()) {
             log.info(
                 { chat: chatJid },

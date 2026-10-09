@@ -6,6 +6,7 @@ import type { BotReply } from '../src/brain/reply.js';
 import { loadImages } from '../src/config/images.js';
 import { loadPersona } from '../src/config/persona.js';
 import { loadSop } from '../src/config/sop.js';
+import { buildPrompt } from '../src/brain/prompt.js';
 import { ChatMemory } from '../src/memory/ChatMemory.js';
 import { openDb, type DB } from '../src/memory/db.js';
 import { Bot } from '../src/pipeline/bot.js';
@@ -569,5 +570,65 @@ describe('language rule R4 in code', () => {
             'the customer writes in English',
         );
         expect(sender.delivered).toEqual(['Hi! What can I do for you today?']);
+    });
+});
+
+describe('speed', () => {
+    it('starts the model while "reading" but sends only after the read receipt', async () => {
+        const events: string[] = [];
+        sender.markRead = async () => {
+            events.push('read:start');
+            await new Promise((r) => setTimeout(r, 50));
+            events.push('read:done');
+        };
+        llm.replies.push(() => {
+            events.push('model');
+            return { messages: ['Hoi!'] };
+        });
+        const send = sender.send.bind(sender);
+        sender.send = async (plan) => {
+            events.push('send');
+            return send(plan);
+        };
+        await say(A, 'hoi');
+        expect(events).toEqual(['read:start', 'model', 'read:done', 'send']);
+    });
+
+    it('keeps the cacheable prompt prefix identical across chats and turns', () => {
+        const base = {
+            persona,
+            sop: sop.sop,
+            facts: [],
+            summary: null,
+            recalled: [],
+            kb: [],
+            maxTokens: 8192,
+        };
+        const imgs = (sent: boolean) => [
+            { id: 'price_list', whenToUse: 'prices', recentlySent: sent },
+        ];
+        const newCustomer = buildPrompt({
+            ...base,
+            activeFlow: null,
+            images: imgs(false),
+            attachedImage: { id: 'welcome', viewOnce: true },
+            chat: { name: 'Anna', isGroup: false },
+            history: [],
+        });
+        const midFlow = buildPrompt({
+            ...base,
+            activeFlow: sop.sop.flows[0]!,
+            images: imgs(true),
+            attachedImage: null,
+            chat: { name: 'Bram', isGroup: false },
+            history: [],
+        });
+        // Everything before the per-chat context message must match exactly.
+        const prefix = (p: ChatMessage[]) =>
+            p.slice(0, 1 + persona.examples.length * 2);
+        expect(prefix(newCustomer)).toEqual(prefix(midFlow));
+        expect(allText(prefix(newCustomer))).not.toMatch(
+            /IMAGE ATTACHED|ACTIVE PROCEDURE|ALREADY SENT/,
+        );
     });
 });

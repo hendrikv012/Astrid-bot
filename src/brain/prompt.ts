@@ -106,13 +106,12 @@ export function corePromptTokens(persona: Persona, sop: Sop): number {
     }).reduce((n, m) => n + estimateTokens(m.content), 0);
 }
 
-function renderCore({
-    persona,
-    sop,
-    activeFlow,
-    images,
-    attachedImage,
-}: PromptInput): string {
+/**
+ * The part that is the same for every chat and every turn. Keeping it
+ * byte-identical lets Ollama reuse its cached work for this prefix instead of
+ * re-reading the rules on every reply, so per-chat details go in renderTurn.
+ */
+function renderCore({ persona, sop, images }: PromptInput): string {
     const lines: string[] = [];
     lines.push('# WHO YOU ARE', persona.text, '');
     lines.push(
@@ -153,35 +152,13 @@ function renderCore({
         '',
     );
 
-    if (activeFlow) {
-        lines.push(
-            `# ACTIVE PROCEDURE: ${activeFlow.id} (${activeFlow.description})`,
-            'Follow these steps in order. Skip steps that are already done in the conversation. Ask one thing at a time.',
-        );
-        activeFlow.steps.forEach((s, i) => lines.push(`${i + 1}. ${s}`));
-        lines.push(
-            'Set "flow_done": true only in the reply that completes the last step.',
-            '',
-        );
-    }
-
-    if (attachedImage) {
-        lines.push(
-            '# IMAGE ATTACHED TO THIS REPLY',
-            `The image "${attachedImage.id}" is sent automatically with your messages${attachedImage.viewOnce ? ' as a view-once photo (the customer can open it one time)' : ''}. Mention it briefly and naturally. Do not describe what is in it and do not say you cannot send pictures.`,
-            '',
-        );
-    }
-
     if (images.length) {
         lines.push(
             '# IMAGES YOU CAN SEND',
             'Set "image_id" to one of these ids only when its rule clearly applies, otherwise null.',
         );
         for (const img of images) {
-            lines.push(
-                `- ${img.id}: ${img.whenToUse}${img.recentlySent ? ' (ALREADY SENT recently in this chat — do not send again)' : ''}`,
-            );
+            lines.push(`- ${img.id}: ${img.whenToUse}`);
         }
         lines.push('');
     }
@@ -206,9 +183,46 @@ function renderExamples({ persona }: PromptInput): ChatMessage[] {
     ]);
 }
 
+/** Per-chat, per-turn instructions; placed after the cached prefix. */
+function renderTurn({
+    activeFlow,
+    attachedImage,
+    images,
+}: PromptInput): string[] {
+    const lines: string[] = [];
+    if (activeFlow) {
+        lines.push(
+            `# ACTIVE PROCEDURE: ${activeFlow.id} (${activeFlow.description})`,
+            'Follow these steps in order. Skip steps that are already done in the conversation. Ask one thing at a time.',
+        );
+        activeFlow.steps.forEach((s, i) => lines.push(`${i + 1}. ${s}`));
+        lines.push(
+            'Set "flow_done": true only in the reply that completes the last step.',
+            '',
+        );
+    }
+
+    if (attachedImage) {
+        lines.push(
+            '# IMAGE ATTACHED TO THIS REPLY',
+            `The image "${attachedImage.id}" is sent automatically with your messages${attachedImage.viewOnce ? ' as a view-once photo (the customer can open it one time)' : ''}. Mention it briefly and naturally. Do not describe what is in it and do not say you cannot send pictures.`,
+            '',
+        );
+    }
+
+    const sent = images.filter((i) => i.recentlySent).map((i) => i.id);
+    if (sent.length) {
+        lines.push(
+            `# IMAGES ALREADY SENT recently in this chat (do not send again): ${sent.join(', ')}`,
+            '',
+        );
+    }
+    return lines;
+}
+
 function renderContext(input: PromptInput): string {
     const { chat, facts, summary, recalled, kb } = input;
-    const lines: string[] = [];
+    const lines: string[] = [...renderTurn(input)];
     lines.push(
         `# MEMORY — THIS CHAT ONLY (${chat.isGroup ? 'group chat' : 'private chat'}${chat.name ? ` with ${chat.name}` : ''})`,
         'Everything below is about this conversation only. You have no knowledge of any other chat.',
