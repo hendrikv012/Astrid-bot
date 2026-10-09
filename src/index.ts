@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { WAMessageStubType } from 'baileys';
-import { OllamaLlm, sameModel } from './brain/llm.js';
+import { createModelClients } from './brain/clients.js';
+import { sameModel } from './brain/llm.js';
 import { corePromptTokens } from './brain/prompt.js';
-import { isBehind, ScheduledLlm } from './brain/scheduler.js';
+import { isBehind } from './brain/scheduler.js';
 import { loadEnv } from './config/env.js';
 import { loadImages } from './config/images.js';
 import { loadPersona } from './config/persona.js';
@@ -52,14 +53,7 @@ async function main(): Promise<void> {
     );
 
     const db = openDb({ path: env.DB_PATH, embedDim: env.EMBED_DIM });
-    const llm = new OllamaLlm({
-        host: env.OLLAMA_HOST,
-        chatModel: env.CHAT_MODEL,
-        embedModel: env.EMBED_MODEL,
-        temperature: env.LLM_TEMPERATURE,
-        seed: env.LLM_SEED,
-        numCtx: env.LLM_NUM_CTX,
-        maxTokens: env.LLM_MAX_TOKENS,
+    const models = createModelClients(env, {
         onChatProgress: (p) => logger.info(p, 'model still working'),
         onChatDone: ({ model, ms }) =>
             logger.info(
@@ -67,10 +61,13 @@ async function main(): Promise<void> {
                 'model answered',
             ),
     });
-    await llm.assertReady([
-        env.EMBED_MODEL,
-        ...(env.EXTRACT_MODEL ? [env.EXTRACT_MODEL] : []),
-    ]);
+    const llm = models.main;
+    await models.assertModels();
+    if (models.helper)
+        logger.info(
+            { replies: env.OLLAMA_HOST, helper: env.HELPER_OLLAMA_HOST },
+            'replies on the main server; embeddings and memory work on the helper',
+        );
 
     // Live-tunable settings: .env values with saved dashboard changes on top.
     const runtime = new RuntimeStore(db, settingsFromEnv(env), (m) =>
@@ -108,8 +105,11 @@ async function main(): Promise<void> {
     }
 
     // Keep the knowledge base in sync on every start (only changed files are re-embedded).
-    const kb = await ingestKnowledge(db, llm, env.KNOWLEDGE_DIR, (m) =>
-        logger.info(`knowledge: ${m}`),
+    const kb = await ingestKnowledge(
+        db,
+        models.embedder,
+        env.KNOWLEDGE_DIR,
+        (m) => logger.info(`knowledge: ${m}`),
     );
     logger.info(
         {
@@ -121,11 +121,9 @@ async function main(): Promise<void> {
         'knowledge base synced',
     );
 
-    // One queue for all model calls: customer replies before background work.
-    const scheduledLlm = new ScheduledLlm(llm, {
-        concurrency: env.LLM_CONCURRENCY,
-        backgroundMaxWaitMs: env.BACKGROUND_MAX_WAIT_SEC * 1000,
-    });
+    // Queued model calls: customer replies before background work (which goes
+    // to the helper server when HELPER_OLLAMA_HOST is set).
+    const scheduledLlm = models.queued;
 
     let bot: Bot | null = null;
     // Only recent ids matter (echoes arrive within seconds); keep memory flat.

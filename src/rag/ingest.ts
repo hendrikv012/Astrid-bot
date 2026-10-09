@@ -137,17 +137,11 @@ function listFiles(dir: string): string[] {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     const { loadEnv } = await import('../config/env.js');
     const { openDb } = await import('../memory/db.js');
-    const { OllamaLlm } = await import('../brain/llm.js');
+    const { createModelClients } = await import('../brain/clients.js');
     const env = loadEnv();
     const db = openDb({ path: env.DB_PATH, embedDim: env.EMBED_DIM });
-    const llm = new OllamaLlm({
-        host: env.OLLAMA_HOST,
-        chatModel: env.CHAT_MODEL,
-        embedModel: env.EMBED_MODEL,
-        temperature: env.LLM_TEMPERATURE,
-        seed: env.LLM_SEED,
-        numCtx: env.LLM_NUM_CTX,
-    });
+    // Same embedding server as the bot (the helper when HELPER_OLLAMA_HOST is set).
+    const llm = createModelClients(env).embedder;
     await llm.assertReady([env.EMBED_MODEL]);
     const r = await ingestKnowledge(db, llm, env.KNOWLEDGE_DIR, (m) =>
         console.log(m),

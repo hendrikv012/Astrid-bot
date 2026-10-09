@@ -62,6 +62,10 @@ const EnvSchema = z
             .default('info'),
 
         OLLAMA_HOST: z.string().url().default('http://127.0.0.1:11434'),
+        // Optional second Ollama server (e.g. a free cloud VM) for embeddings and
+        // background memory work, so the main GPU only writes replies.
+        HELPER_OLLAMA_HOST: z.string().url().optional(),
+        HELPER_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(1),
         CHAT_MODEL: z.string().default('qwen2.5:14b-instruct'),
         EXTRACT_MODEL: z.string().optional(),
         EMBED_MODEL: z.string().default('nomic-embed-text'),

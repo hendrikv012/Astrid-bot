@@ -69,6 +69,10 @@ npm run loadtest -- --fake-llm --fake-latency 3000 --rate 200    # without a mod
 
 It prints wait times per minute and a verdict ("keeps up" / "falls behind"). Nothing is sent to WhatsApp.
 
+## Splitting the work over two machines
+
+Set `HELPER_OLLAMA_HOST` to a second Ollama server (for example a free cloud VM, reached over Tailscale). Customer replies stay on the main server (`OLLAMA_HOST`, your GPU); embeddings (knowledge search, message recall) and background memory work (facts, summaries) go to the helper. Pull `EMBED_MODEL` and `EXTRACT_MODEL` (a small model; the chat model if unset) on the helper. If the helper goes down, the bot keeps answering, just without knowledge search until it is back, and memory updates catch up later.
+
 ## Running in the background (pm2)
 
 [pm2](https://pm2.keymetrics.io/) keeps the bot running as the process **`astrid`**: it restarts it after a crash (with backoff, so a missing Ollama doesn't cause a restart loop) and, once set up, after a reboot. Settings are in `ecosystem.config.cjs`.

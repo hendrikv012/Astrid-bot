@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import pino from 'pino';
-import { OllamaLlm } from '../brain/llm.js';
+import { createModelClients } from '../brain/clients.js';
 import { loadEnv } from '../config/env.js';
 import { loadImages } from '../config/images.js';
 import { loadPersona } from '../config/persona.js';
@@ -69,14 +69,7 @@ async function main() {
     });
 
     let writing = false;
-    const llm = new OllamaLlm({
-        host: env.OLLAMA_HOST,
-        chatModel: env.CHAT_MODEL,
-        embedModel: env.EMBED_MODEL,
-        temperature: env.LLM_TEMPERATURE,
-        seed: env.LLM_SEED,
-        numCtx: env.LLM_NUM_CTX,
-        maxTokens: env.LLM_MAX_TOKENS,
+    const models = createModelClients(env, {
         progressEveryMs: 10_000,
         onChatProgress: ({ chars, thinkingChars, seconds }) => {
             if (thinkingChars && !chars)
@@ -106,8 +99,9 @@ async function main() {
             );
         },
     });
-    await llm.assertReady([env.CHAT_MODEL, env.EMBED_MODEL]);
-    await ingestKnowledge(db, llm, env.KNOWLEDGE_DIR);
+    await models.main.assertReady([env.CHAT_MODEL]);
+    await models.assertModels();
+    await ingestKnowledge(db, models.embedder, env.KNOWLEDGE_DIR);
 
     const sender: Sender = {
         async markRead() {},
@@ -139,7 +133,7 @@ async function main() {
 
     const bot = new Bot({
         db,
-        llm,
+        llm: models.queued,
         sender,
         sop,
         persona,
